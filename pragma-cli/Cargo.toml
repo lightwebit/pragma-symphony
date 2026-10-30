@@ -1,11 +1,11 @@
 [package]
 name = "pragma-cli"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"
 authors = ["lightweb.it <lightweb.it@gmail.com>"]
 description = "Pragma CLI wrapper — wraps an agent process and streams typed atoms as NDJSON"
-repository = "https://github.com/lightwebit/pragma"
+repository = "https://github.com/lightwebit/pragma-symphony"
 
 [[bin]]
 name = "pragma"

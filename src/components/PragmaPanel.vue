@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch } from 'vue'
 import { useSessionStore } from '../stores/session'
+import { canCommand } from '../webCaps'
 import AnalysisCard from './AnalysisCard.vue'
 import QuestionsCard from './QuestionsCard.vue'
 import PlanCard from './PlanCard.vue'
 import ReportCard from './ReportCard.vue'
 import TestsCard from './TestsCard.vue'
+import ReviewCard from './ReviewCard.vue'
 import ClosingCard from './ClosingCard.vue'
 import RawNoteCard from './RawNoteCard.vue'
 
@@ -27,6 +29,7 @@ const cc = reactive({
   plan: false,
   report: false,
   tests: false,
+  review: false,
   closing: false,
   rawNote: false,
 })
@@ -44,6 +47,9 @@ watch(() => store.pragmaReport, (val) => {
 watch(() => store.pragmaTests, (val) => {
   if (val) { cc.analysis = true; cc.questions = true; cc.plan = true; cc.report = true }
 })
+watch(() => store.pragmaReview, (val) => {
+  if (val) { cc.analysis = true; cc.questions = true; cc.plan = true; cc.report = true }
+})
 watch(() => store.pragmaClosing, (val) => {
   if (val) { cc.analysis = true; cc.questions = true; cc.plan = true; cc.report = true; cc.tests = true }
 })
@@ -55,6 +61,7 @@ watch(() => store.sessionId, () => {
   cc.plan = false
   cc.report = false
   cc.tests = false
+  cc.review = false
   cc.closing = false
   cc.rawNote = false
 })
@@ -66,6 +73,8 @@ const hasContent = computed(() =>
   || store.pragmaPlan !== null
   || store.pragmaReport !== null
   || store.pragmaTests !== null
+  || store.pragmaVerify !== null
+  || store.pragmaReview !== null
   || store.pragmaClosing !== null
   || store.completedSteps.length > 0
 )
@@ -76,8 +85,35 @@ const phaseLabel = computed(() => {
     case 'awaiting_approval':     return 'approval'
     case 'awaiting_confirmation': return 'confirm'
     case 'awaiting_close':        return 'done'
+    case 'awaiting_review_decision': return 'review'
     default: return null
   }
+})
+
+// How the last turn ended: if the model left no phase marker no button
+// appears, and if the process died midway the cards may be partial.
+// On the web without commands: the phase waiting for a decision is taken on the PC.
+const pcWaitNotice = computed(() => {
+  switch (store.pragmaPhase) {
+    case 'awaiting_approval':     return 'The plan is waiting for approval — approve or modify it on the PC.'
+    case 'awaiting_answers':      return 'Claude asked questions — answer them on the PC.'
+    // With the timer running on the PC nobody is waited for: Continue starts by itself.
+    case 'awaiting_confirmation': return store.autoConfirmAt
+      ? 'Auto-continue is on — the PC continues by itself.'
+      : 'Waiting for Continue on the PC.'
+    default:                      return null
+  }
+})
+
+const turnNotice = computed(() => {
+  const te = store.turnEnd
+  if (store.running || !te) return null
+  if (te.truncated) {
+    return 'This turn did not finish cleanly (stopped, or the process failed): the last section may be incomplete'
+      + (store.pragmaReport ? ', and VERIFY was skipped.' : '.')
+  }
+  if (!te.terminal) return 'The model ended the turn without a protocol marker, so there is nothing to approve. Reply to continue.'
+  return null
 })
 
 function sendControl(msg: 'CONTINUE' | 'ABORT') {
@@ -144,10 +180,21 @@ function sendControl(msg: 'CONTINUE' | 'ABORT') {
           @toggle="cc.report = !cc.report"
         />
         <TestsCard
-          v-if="store.pragmaTests"
+          v-if="store.pragmaTests || store.pragmaE2e"
           :data="store.pragmaTests"
+          :verify="store.pragmaVerify"
+          :e2e="store.pragmaE2e"
           :collapsed="cc.tests"
           @toggle="cc.tests = !cc.tests"
+        />
+        <ReviewCard
+          v-if="store.pragmaReview"
+          :data="store.pragmaReview"
+          :profile="profile"
+          :project-id="store.activeProjectId"
+          :working-dir="workingDir"
+          :collapsed="cc.review"
+          @toggle="cc.review = !cc.review"
         />
         <ClosingCard
           v-if="store.pragmaClosing"
@@ -159,10 +206,20 @@ function sendControl(msg: 'CONTINUE' | 'ABORT') {
         />
       </div>
 
+      <!-- Web without commands: the buttons to decide are not there, it says where to decide. -->
+      <div v-if="!canCommand && pcWaitNotice" class="turn-notice" data-testid="web-wait-notice">
+        <span class="turn-notice-text">{{ pcWaitNotice }}</span>
+      </div>
+
+      <div v-if="turnNotice" class="turn-notice" data-testid="turn-end-notice">
+        <span class="turn-notice-text">{{ turnNotice }}</span>
+        <button v-if="canCommand" class="ctrl-btn ctrl-reply" data-testid="turn-end-reply" @click="emit('continueSession')">Reply</button>
+      </div>
+
       <!-- Confirmation phase controls -->
-      <div v-if="store.pragmaPhase === 'awaiting_confirmation'" class="panel-footer">
-        <button class="ctrl-btn ctrl-ok" :disabled="store.running" @click="sendControl('CONTINUE')">Continue</button>
-        <button class="ctrl-btn ctrl-abort" :disabled="store.running" @click="sendControl('ABORT')">Cancel</button>
+      <div v-if="store.pragmaPhase === 'awaiting_confirmation' && canCommand" class="panel-footer">
+        <button class="ctrl-btn ctrl-ok" data-testid="pragma-continue" :disabled="store.running" @click="sendControl('CONTINUE')">Continue</button>
+        <button class="ctrl-btn ctrl-abort" data-testid="pragma-abort" :disabled="store.running" @click="sendControl('ABORT')">Cancel</button>
       </div>
     </template>
   </div>
@@ -267,6 +324,27 @@ function sendControl(msg: 'CONTINUE' | 'ABORT') {
   cursor: pointer;
   transition: opacity 0.12s;
 }
+.turn-notice {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-color);
+  background: rgba(212, 168, 67, 0.08);
+}
+.turn-notice-text {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-atom-data, #d4a843);
+}
+.ctrl-reply {
+  align-self: flex-start;
+  background: rgba(212, 168, 67, 0.18);
+  color: var(--color-atom-data, #d4a843);
+  border: 1px solid rgba(212, 168, 67, 0.45);
+}
+.ctrl-reply:hover { background: rgba(212, 168, 67, 0.32); }
 .ctrl-ok    { background: #4caf50; color: #fff; }
 .ctrl-ok:hover { opacity: 0.85; }
 .ctrl-abort { background: rgba(255, 59, 48, 0.15); color: var(--color-error, #ff3b30); border: 1px solid rgba(255,59,48,0.3); }

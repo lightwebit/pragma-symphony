@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from 'vue'
 import { useSessionStore } from '../stores/session'
+import { canCommand } from '../webCaps'
 import AtomCard from './AtomCard.vue'
 import { filterAtoms } from '../atomFilter'
 
@@ -19,6 +20,8 @@ const props = defineProps<{ focusMode: boolean; workingDir?: string; attachments
 const emit = defineEmits<{ openComposer: [] }>()
 
 const store = useSessionStore()
+
+const modelLabel = computed(() => (store.sessionModel === 'fable' ? 'Fable' : 'Opus'))
 
 const contextSession = computed(() => {
   if (!store.sessionId || store.running || store.atoms.length === 0) return null
@@ -77,22 +80,27 @@ function jumpToBottom() {
             <span class="ctx-sep">·</span>
             <span class="ctx-dir" :title="store.sessionWorkingDir">{{ store.sessionWorkingDir }}</span>
           </template>
+          <template v-if="store.sessionGitBranch">
+            <span class="ctx-sep">·</span>
+            <span class="ctx-branch" data-testid="session-git-branch" :title="store.sessionGitBranch">⎇ {{ store.sessionGitBranch }}</span>
+          </template>
           <span class="ctx-sep">·</span>
           <span class="ctx-count">{{ store.atoms.length }} events</span>
           <template v-if="store.sessionUsage?.totalCostUsd">
             <span class="ctx-sep">·</span>
             <span class="ctx-cost">${{ store.sessionUsage.totalCostUsd.toFixed(4) }}</span>
           </template>
-          <template v-if="store.sessionModel === 'opus'">
+          <template v-if="store.sessionModel !== 'sonnet'">
             <span class="ctx-sep">·</span>
-            <span class="ctx-opus">Opus</span>
+            <span class="ctx-opus">{{ modelLabel }}</span>
           </template>
         </div>
-        <button class="ctx-continue" @click="emit('openComposer')">Continue ↩</button>
+        <button v-if="canCommand" class="ctx-continue" @click="emit('openComposer')">Continue ↩</button>
       </div>
 
       <div v-if="store.atoms.length === 0 && !store.running" class="empty-state">
-        <button class="empty-cta" @click="emit('openComposer')">
+        <div v-if="!canCommand" class="empty-pick" data-testid="empty-pick">Pick a session to follow it here.</div>
+        <button v-else class="empty-cta" @click="emit('openComposer')">
           <svg class="empty-cta-glyph" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
             <polygon
               points="92,50 71,13.6 29,13.6 8,50 29,86.4 71,86.4"
@@ -155,9 +163,9 @@ function jumpToBottom() {
       </button>
     </Transition>
 
-    <!-- Opus model badge — visible while running -->
+    <!-- Model badge — visible while running on a non-default model -->
     <Transition name="token-chip">
-      <div v-if="store.sessionModel === 'opus' && store.running" class="opus-chip">Opus</div>
+      <div v-if="store.sessionModel !== 'sonnet' && store.running" class="opus-chip">{{ modelLabel }}</div>
     </Transition>
 
     <!-- Token counter chip -->
@@ -213,6 +221,9 @@ function jumpToBottom() {
   justify-content: center;
   gap: 20px;
 }
+
+/* On the web without commands there is nothing to start: it says what to do instead of the button. */
+.empty-pick { font-size: 0.85rem; color: var(--text-secondary); padding: 24px; text-align: center; }
 
 .empty-cta {
   display: flex;
@@ -474,6 +485,14 @@ function jumpToBottom() {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 200px;
+}
+.ctx-branch {
+  color: var(--color-atom-config);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+  opacity: 0.8;
 }
 .ctx-count { white-space: nowrap; }
 .ctx-cost  { white-space: nowrap; }

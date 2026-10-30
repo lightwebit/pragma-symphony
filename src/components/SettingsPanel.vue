@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '../platform'
 import { useSettingsStore, type Profile } from '../stores/settings'
+import { DEFAULT_HUB_URL } from '../remote/bridge'
+import { hashPin, isValidPin, PIN_MIN_DIGITS } from '../remote/pin'
 
 const emit = defineEmits<{ close: [] }>()
 const store = useSettingsStore()
@@ -14,9 +16,26 @@ const profiles = ref<Profile[]>(
   store.settings.profiles.map(p => ({ ...p }))
 )
 const notificationsEnabled = ref(store.settings.notificationsEnabled ?? false)
+const soundEnabled = ref(store.settings.soundEnabled ?? true)
 const diffAlwaysOpen = ref(store.settings.diffAlwaysOpen ?? false)
+const sessionBranchEnabled = ref(store.settings.sessionBranchEnabled ?? false)
+const reviewEnabled = ref(store.settings.reviewEnabled ?? true)
 const defaultIdx = ref(store.settings.defaultProfileIndex ?? 0)
 const exportDir = ref(store.settings.exportDir ?? '')
+const remoteEnabled = ref(store.settings.remote?.enabled ?? false)
+const remoteHubUrl = ref(store.settings.remote?.hubUrl ?? DEFAULT_HUB_URL)
+const remoteSecret = ref(store.settings.remote?.hostSecret ?? '')
+// Commands from the web: the plain PIN lives only in the field until it is saved; after that only the hash remains.
+const remoteCommands = ref(store.settings.remote?.commandsEnabled ?? false)
+const pinIsSet = !!store.settings.remote?.commandPinHash
+const newPin = ref('')
+// The sharing privacy notice appears only the first time sharing is switched on; once
+// saved as on, it does not come back.
+const shareNoticeSeen = store.settings.remote?.shareNoticeSeen ?? false
+const PRIVACY_URL = 'https://noema.tools/pragma-symphony/privacy'
+function openPrivacy() {
+  invoke('open_url', { url: PRIVACY_URL }).catch(console.error)
+}
 
 function addProfile() {
   profiles.value.push({ label: '', binary: '', configDir: null, language: 'English' })
@@ -24,6 +43,8 @@ function addProfile() {
 
 function removeProfile(i: number) {
   profiles.value.splice(i, 1)
+  outputStyleWarnings.value = {}
+  Promise.all(profiles.value.map((_, j) => checkOutputStyle(j)))
 }
 
 async function autodetect(i: number) {
@@ -42,12 +63,23 @@ const saveError = ref<string | null>(null)
 
 const trustedDirs = ref<string[]>([])
 
+// Non-blocking warning per profile if the CLI has an outputStyle different from the default —
+// the pragma protocol has never been verified against styles other than the default.
+const outputStyleWarnings = ref<Record<number, string | null>>({})
+
+async function checkOutputStyle(i: number) {
+  outputStyleWarnings.value[i] = await invoke<string | null>('check_output_style', {
+    configDir: profiles.value[i]?.configDir || null,
+  })
+}
+
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
 
 onMounted(async () => {
   trustedDirs.value = await invoke<string[]>('get_trusted_dirs')
+  await Promise.all(profiles.value.map((_, i) => checkOutputStyle(i)))
   window.addEventListener('keydown', onKeyDown)
 })
 
@@ -61,13 +93,33 @@ async function removeTrustedDir(dir: string) {
 }
 
 async function saveAndClose() {
-  saving.value = true
   saveError.value = null
+  const pin = newPin.value.trim()
+  if (pin && !isValidPin(pin)) {
+    saveError.value = `The PIN must be ${PIN_MIN_DIGITS} to 12 digits.`
+    return
+  }
+  if (remoteCommands.value && !pin && !pinIsSet) {
+    saveError.value = 'Set a PIN before allowing commands from the web.'
+    return
+  }
+  saving.value = true
   store.settings.profiles = profiles.value.map(p => ({ ...p }))
   store.settings.notificationsEnabled = notificationsEnabled.value
+  store.settings.soundEnabled = soundEnabled.value
   store.settings.diffAlwaysOpen = diffAlwaysOpen.value
+  store.settings.sessionBranchEnabled = sessionBranchEnabled.value
+  store.settings.reviewEnabled = reviewEnabled.value
   store.settings.defaultProfileIndex = defaultIdx.value
   store.settings.exportDir = exportDir.value.trim() || null
+  store.settings.remote = {
+    enabled: remoteEnabled.value,
+    hubUrl: remoteHubUrl.value.trim() || DEFAULT_HUB_URL,
+    hostSecret: remoteSecret.value.trim(),
+    commandsEnabled: remoteCommands.value,
+    commandPinHash: pin ? await hashPin(pin) : (store.settings.remote?.commandPinHash ?? ''),
+    shareNoticeSeen: shareNoticeSeen || remoteEnabled.value,
+  }
   try {
     await store.save()
     saving.value = false
@@ -82,10 +134,10 @@ async function saveAndClose() {
 
 <template>
   <div class="overlay" @click.self="emit('close')">
-    <div class="panel">
+    <div class="panel" data-testid="settings-panel">
       <div class="panel-header">
         <span>Settings</span>
-        <button class="close-btn" @click="emit('close')">✕</button>
+        <button class="close-btn" data-testid="settings-close" @click="emit('close')">✕</button>
       </div>
 
       <div class="panel-body">
@@ -130,7 +182,12 @@ async function saveAndClose() {
               v-model="p.configDir"
               class="input config-input"
               placeholder="CLAUDE_CONFIG_DIR (optional)"
+              @blur="checkOutputStyle(i)"
             />
+          </div>
+          <div v-if="outputStyleWarnings[i]" class="profile-sub-row output-style-warning">
+            ⚠ output style "{{ outputStyleWarnings[i] }}" is active for this profile — the Pragma
+            protocol markers are only verified against the default style; cards may not render.
           </div>
 
           <!-- Language -->
@@ -156,6 +213,10 @@ async function saveAndClose() {
           <input type="checkbox" v-model="notificationsEnabled" class="toggle-checkbox" />
           <span class="toggle-label">Notify when session ends</span>
         </label>
+        <label class="toggle-row">
+          <input type="checkbox" v-model="soundEnabled" class="toggle-checkbox" />
+          <span class="toggle-label">Play sound when session ends</span>
+        </label>
       </div>
 
       <div class="section">
@@ -164,6 +225,79 @@ async function saveAndClose() {
           <input type="checkbox" v-model="diffAlwaysOpen" class="toggle-checkbox" />
           <span class="toggle-label">Always expand diff atoms</span>
         </label>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Git and review</div>
+        <label class="toggle-row">
+          <input type="checkbox" v-model="reviewEnabled" class="toggle-checkbox" data-testid="review-enabled" />
+          <span class="toggle-label">Review each finished session with a separate Claude session (costs one review per session)</span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" v-model="sessionBranchEnabled" class="toggle-checkbox" />
+          <span class="toggle-label">Create a session branch (pragma/&lt;session-id&gt;) on versioned working directories</span>
+        </label>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Web sharing</div>
+        <label class="toggle-row">
+          <input type="checkbox" v-model="remoteEnabled" class="toggle-checkbox" data-testid="remote-enabled" />
+          <span class="toggle-label">Share sessions to web (adds a “share” button to the header)</span>
+        </label>
+        <div v-if="remoteEnabled && !shareNoticeSeen" class="share-notice" data-testid="share-privacy-notice">
+          While sharing is on, everything Pragma shows — projects, sessions, prompts, output, file paths — passes
+          through the noema.tools relay to reach the browser that opens your link. Nothing is stored there; the
+          link dies when you stop sharing.
+          <a class="share-notice-link" data-testid="share-privacy-link" @click.prevent="openPrivacy">Privacy policy</a>
+        </div>
+        <template v-if="remoteEnabled">
+          <div class="export-row" style="margin-top:8px">
+            <input
+              v-model="remoteHubUrl"
+              class="input export-input"
+              data-testid="remote-hub-url"
+              :placeholder="DEFAULT_HUB_URL"
+            />
+          </div>
+          <div class="export-row" style="margin-top:6px">
+            <input
+              v-model="remoteSecret"
+              type="password"
+              autocomplete="off"
+              class="input export-input"
+              data-testid="remote-secret"
+              placeholder="Access key (on request, see the README)"
+            />
+          </div>
+          <div class="export-hint">
+            Off until you press <code>share</code> in the header. While sharing, anyone who has the link can watch
+            everything in this Pragma — projects, sessions, the live stream. The link dies when you stop sharing or
+            close Pragma, and nothing is stored on the server. The access key is personal and available on request (see the README); it is kept in plain text in
+            <code>settings.json</code>.
+          </div>
+          <label class="toggle-row" style="margin-top:10px">
+            <input type="checkbox" v-model="remoteCommands" class="toggle-checkbox" data-testid="remote-commands" />
+            <span class="toggle-label">Allow commands from the web (start, approve, answer, stop) — asks for a PIN</span>
+          </label>
+          <div v-if="remoteCommands" class="export-row" style="margin-top:6px">
+            <input
+              v-model="newPin"
+              type="password"
+              inputmode="numeric"
+              autocomplete="off"
+              maxlength="12"
+              class="input export-input"
+              data-testid="remote-pin"
+              :placeholder="pinIsSet ? 'PIN set — type a new one to change it' : `PIN (${PIN_MIN_DIGITS}+ digits)`"
+            />
+          </div>
+          <div v-if="remoteCommands" class="export-hint">
+            Sessions started from the web run on this PC with your Claude account, in the project's working directory,
+            without asking for permissions. The web page asks for the PIN once; after 5 wrong PINs commands stay locked
+            until you share again. Only a hash of the PIN is saved.
+          </div>
+        </template>
       </div>
 
       <div class="section export-section">
@@ -176,7 +310,7 @@ async function saveAndClose() {
           />
           <button class="browse-btn" title="Browse" @click="browseExportDir">…</button>
         </div>
-        <div class="export-hint">Default: <code>~/Downloads</code> (OS-specific)</div>
+        <div class="export-hint">Default: <code>~/Downloads</code> (OS-specific). Each project exports into its own subfolder here.</div>
       </div>
 
       <div class="section">
@@ -195,6 +329,7 @@ async function saveAndClose() {
         <button class="cancel-btn" @click="emit('close')">Cancel</button>
         <button
           class="save-btn"
+          data-testid="settings-save"
           :disabled="saving"
           @click="saveAndClose"
         >
@@ -319,6 +454,11 @@ async function saveAndClose() {
   color: var(--text-secondary);
   opacity: 0.65;
 }
+
+.output-style-warning {
+  font-size: 0.72rem;
+  color: var(--color-action-modify);
+}
 .prompt-hint code {
   font-family: monospace;
   font-size: 0.72rem;
@@ -380,24 +520,6 @@ async function saveAndClose() {
   color: var(--color-atom-code);
 }
 
-.url-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-.url-label {
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  width: 80px;
-  flex-shrink: 0;
-}
-.url-input {
-  flex: 1;
-  font-family: monospace;
-  font-size: 0.78rem;
-}
-
 .notif-section {
   border-top: 1px solid var(--border-color);
   padding-top: 14px;
@@ -432,6 +554,18 @@ async function saveAndClose() {
   flex-shrink: 0;
 }
 .browse-btn:hover { color: var(--text-primary); }
+
+.share-notice {
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: rgba(201, 138, 48, 0.1);
+  border: 1px solid rgba(201, 138, 48, 0.45);
+  border-radius: 6px;
+}
+.share-notice-link { color: var(--color-atom-code); cursor: pointer; margin-left: 4px; white-space: nowrap; }
 
 .export-hint {
   margin-top: 5px;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { PragmaClosing } from '../stores/session'
+import { canCommand } from '../webCaps'
 
 defineProps<{ data: PragmaClosing; collapsed: boolean }>()
 defineEmits<{ toggle: []; continue: []; newSession: [] }>()
@@ -17,7 +18,7 @@ defineEmits<{ toggle: []; continue: []; newSession: [] }>()
     <div class="card-collapse" :class="{ 'is-collapsed': collapsed }">
       <div class="card-inner">
         <p class="closing-text">{{ data.text }}</p>
-        <div class="closing-actions">
+        <div v-if="canCommand" class="closing-actions">
           <button class="btn btn-continue" @click="$emit('continue')">Continue</button>
           <button class="btn btn-new" @click="$emit('newSession')">New session</button>
         </div>

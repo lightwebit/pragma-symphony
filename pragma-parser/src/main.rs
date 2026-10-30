@@ -9,7 +9,7 @@ use pragma_parser::{
 };
 
 fn main() -> Result<()> {
-    // Forza UTF-8 sulla console Windows
+    // Force UTF-8 on the Windows console
     #[cfg(windows)]
     set_console_utf8();
 
@@ -17,14 +17,14 @@ fn main() -> Result<()> {
     let mut parser = Parser::new(session_id);
     let mut sink = StdoutSink::new();
 
-    // Legge stdin come raw bytes e converte in UTF-8 con lossy fallback.
-    // Necessario su Windows dove il codepage di sistema può non essere UTF-8.
+    // Reads stdin as raw bytes and converts to UTF-8 with a lossy fallback.
+    // Needed on Windows, where the system codepage may not be UTF-8.
     let mut raw = Vec::new();
     io::stdin().read_to_end(&mut raw)?;
     let content = String::from_utf8_lossy(&raw);
 
     for line in content.lines() {
-        // lines() gestisce sia \n che \r\n
+        // lines() handles both \n and \r\n
         let atoms = parser.feed_line(line, OutputSource::Stdout);
         for atom in atoms {
             sink.push(atom)?;
@@ -67,9 +67,9 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Imposta il codepage della console Windows a UTF-8 (65001).
-/// Senza questo, caratteri accentati (à, è, ì, ecc.) vengono
-/// letti con il codepage di sistema (tipicamente CP1252 in Italia).
+/// Sets the Windows console codepage to UTF-8 (65001).
+/// Without this, accented characters (à, è, ì, etc.) are
+/// read with the system codepage (typically CP1252 in Western Europe).
 #[cfg(windows)]
 fn set_console_utf8() {
     use std::os::raw::c_uint;

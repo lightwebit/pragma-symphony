@@ -60,6 +60,10 @@ pub enum FileAction {
 pub enum OutputSource {
     Stdout,
     Stderr,
+    /// Action that arrived from the web: the atom recording it is written by the desktop, marked this way.
+    /// In the DB it is plain text like the other two: no migration, and an earlier version of
+    /// Pragma reads it back as `Stdout`.
+    Remote,
 }
 
 // ---------------------------------------------------------------------------

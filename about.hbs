@@ -1,0 +1,12 @@
+{{!-- Triple-stache everywhere: licence texts contain quotes and "<>",
+      and the default HTML escaping makes them unreadable in a Markdown file. --}}
+{{#each licenses}}
+### {{{name}}}
+
+Applies to: {{#each used_by}}`{{{crate.name}}} {{{crate.version}}}`{{#unless @last}}, {{/unless}}{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

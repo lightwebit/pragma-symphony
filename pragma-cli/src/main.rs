@@ -5,9 +5,16 @@ use uuid::Uuid;
 use pragma_parser::{
     parser::Parser,
     sink::{FanOutSink, StdoutSink},
-    storage::{export_session_json, list_saved_sessions, mark_session_saved, SqliteSink},
+    storage::{
+        create_project, export_session_json, list_all_sessions, list_projects, resolve_session_id,
+        SqliteSink,
+    },
     types::{AtomSink, OutputSource},
 };
+
+/// Slug of the project that collects sessions started from the command line.
+/// Sessions require a project (non-null FK since schema v3).
+const CLI_PROJECT_SLUG: &str = "cli";
 
 fn main() {
     #[cfg(windows)]
@@ -17,13 +24,12 @@ fn main() {
 
     match args.get(1).map(String::as_str) {
         Some("run") => cmd_run(&args),
-        Some("save") => cmd_save(&args),
         Some("history") => cmd_history(),
         Some("export") => cmd_export(&args),
         Some("--help") | Some("-h") | None => print_help(),
         Some(cmd) => {
-            eprintln!("pragma: comando sconosciuto '{cmd}'");
-            eprintln!("Usa 'pragma --help'.");
+            eprintln!("pragma: unknown command '{cmd}'");
+            eprintln!("Use 'pragma --help'.");
             std::process::exit(1);
         }
     }
@@ -38,7 +44,7 @@ fn cmd_run(args: &[String]) {
     let cmd_args = match sep {
         Some(i) if i + 1 < args.len() => &args[i + 1..],
         _ => {
-            eprintln!("Uso: pragma run -- <comando> [args...]");
+            eprintln!("Usage: pragma run -- <command> [args...]");
             std::process::exit(1);
         }
     };
@@ -48,14 +54,25 @@ fn cmd_run(args: &[String]) {
     let command_str = cmd_args.join(" ");
 
     let session_id = Uuid::new_v4();
+    let project_id = cli_project_id();
 
     // SqliteSink — salva su ~/.pragma/pragma.db
-    let sqlite = SqliteSink::new(session_id, Some(&command_str), None, None).unwrap_or_else(|e| {
-        eprintln!("pragma: errore DB: {e}");
+    let sqlite = SqliteSink::new(
+        session_id,
+        &project_id,
+        Some(&command_str),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("pragma: DB error: {e}");
         std::process::exit(1);
     });
 
-    // FanOut: NDJSON su stdout + SQLite
+    // FanOut: NDJSON to stdout + SQLite
     let mut sink: Box<dyn AtomSink> = Box::new(FanOutSink::new(vec![
         Box::new(StdoutSink::new()),
         Box::new(sqlite),
@@ -70,11 +87,11 @@ fn cmd_run(args: &[String]) {
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap_or_else(|e| {
-            eprintln!("pragma: impossibile avviare '{cmd}': {e}");
+            eprintln!("pragma: unable to start '{cmd}': {e}");
             std::process::exit(1);
         });
 
-    let stdout = child.stdout.take().expect("stdout pipe mancante");
+    let stdout = child.stdout.take().expect("missing stdout pipe");
     let reader = BufReader::new(stdout);
 
     for raw_line in reader.split(b'\n') {
@@ -96,13 +113,13 @@ fn cmd_run(args: &[String]) {
     sink.finalize().ok();
 
     let status = child.wait().unwrap_or_else(|e| {
-        eprintln!("pragma: errore attesa processo: {e}");
+        eprintln!("pragma: error waiting for process: {e}");
         std::process::exit(1);
     });
 
     print_metrics(&parser, session_id);
     eprintln!(
-        "  Usa 'pragma save {id}' per conservare questa sessione.",
+        "  Run 'pragma history' to see this session, or 'pragma export {id}' to export it.",
         id = &session_id.to_string()[..8]
     );
 
@@ -110,38 +127,18 @@ fn cmd_run(args: &[String]) {
 }
 
 // ---------------------------------------------------------------------------
-// pragma save <session-id>
-// ---------------------------------------------------------------------------
-
-fn cmd_save(args: &[String]) {
-    let id_prefix = match args.get(2) {
-        Some(id) => id,
-        None => {
-            eprintln!("Uso: pragma save <session-id>");
-            std::process::exit(1);
-        }
-    };
-
-    match mark_session_saved(id_prefix) {
-        Ok(full_id) => eprintln!("Sessione salvata: {full_id}"),
-        Err(e) => {
-            eprintln!("pragma save: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // pragma history
 // ---------------------------------------------------------------------------
 
+/// Lists every session with at least one atom, not only the "saved" ones:
+/// the save concept never really existed (see `list_all_sessions`).
 fn cmd_history() {
-    match list_saved_sessions() {
+    match list_all_sessions() {
         Ok(sessions) if sessions.is_empty() => {
-            eprintln!("Nessuna sessione salvata. Usa 'pragma save <id>' dopo una run.");
+            eprintln!("No sessions yet. Run 'pragma run -- <command>' first.");
         }
         Ok(sessions) => {
-            eprintln!("{:<38} {:<25} {:>5}  comando", "ID", "data", "atomi");
+            eprintln!("{:<38} {:<25} {:>5}  command", "ID", "date", "atoms");
             eprintln!("{}", "─".repeat(80));
             for s in sessions {
                 eprintln!(
@@ -168,12 +165,19 @@ fn cmd_export(args: &[String]) {
     let id_prefix = match args.get(2) {
         Some(id) => id,
         None => {
-            eprintln!("Uso: pragma export <session-id>");
+            eprintln!("Usage: pragma export <session-id>");
             std::process::exit(1);
         }
     };
 
-    match export_session_json(id_prefix) {
+    let full_id = match resolve_session_id(id_prefix) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("pragma export: {e}");
+            std::process::exit(1);
+        }
+    };
+    match export_session_json(&full_id) {
         Ok(json) => println!("{json}"),
         Err(e) => {
             eprintln!("pragma export: {e}");
@@ -185,6 +189,37 @@ fn cmd_export(args: &[String]) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Returns the "CLI" project id, creating it on first run.
+fn cli_project_id() -> String {
+    let projects = list_projects().unwrap_or_else(|e| {
+        eprintln!("pragma: DB error: {e}");
+        std::process::exit(1);
+    });
+
+    if let Some(project) = projects.iter().find(|p| p.slug == CLI_PROJECT_SLUG) {
+        return project.id.clone();
+    }
+
+    create_project(
+        "CLI",
+        Some("Sessions started via `pragma run`"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("pragma: unable to create the CLI project: {e}");
+        std::process::exit(1);
+    })
+    .id
+}
 
 fn print_metrics(parser: &Parser, session_id: Uuid) {
     let m = parser.metrics();
@@ -212,17 +247,15 @@ fn print_metrics(parser: &Parser, session_id: Uuid) {
 }
 
 fn print_help() {
-    eprintln!("Pragma — atomizzatore di output agenti AI");
+    eprintln!("Pragma — AI agent output atomizer");
     eprintln!();
-    eprintln!("COMANDI:");
-    eprintln!("  pragma run -- <comando> [args...]   Avvolge e atomizza in real-time");
-    eprintln!("  pragma save <session-id>            Salva permanentemente una sessione");
-    eprintln!("  pragma history                      Lista sessioni salvate");
-    eprintln!("  pragma export <session-id>          Esporta sessione come JSON su stdout");
+    eprintln!("COMMANDS:");
+    eprintln!("  pragma run -- <command> [args...]   Wraps and atomizes in real time");
+    eprintln!("  pragma history                      Lists sessions run via 'pragma run'");
+    eprintln!("  pragma export <session-id>          Exports a session as JSON to stdout");
     eprintln!();
-    eprintln!("ESEMPI:");
-    eprintln!("  pragma run -- claude -p --dangerously-skip-permissions \"crea hello.rs\"");
-    eprintln!("  pragma save b502a1cf");
+    eprintln!("EXAMPLES:");
+    eprintln!("  pragma run -- claude -p --output-format stream-json --verbose --dangerously-skip-permissions \"create hello.rs\"");
     eprintln!("  pragma history");
 }
 

@@ -12,10 +12,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 
 <template>
   <div class="help-overlay" @click.self="emit('close')">
-    <div class="help-modal">
+    <div class="help-modal" data-testid="help-panel">
       <div class="help-header">
         <span class="help-title">guide</span>
-        <button class="help-close" @click="$emit('close')">×</button>
+        <button class="help-close" data-testid="help-close" @click="$emit('close')">×</button>
       </div>
 
       <div class="help-body">

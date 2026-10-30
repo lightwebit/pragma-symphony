@@ -157,6 +157,7 @@ function replyBody(content: string): string {
     <!-- UserReply -->
     <template v-else-if="atom.atomType === 'UserReply'">
       <span class="reply-badge">{{ replyBadge(atom.content) }}</span>
+      <span v-if="atom.source === 'Remote'" class="remote-badge" data-testid="atom-remote" title="Sent from the web page (W9)">from web</span>
       <pre class="reply-body">{{ replyBody(atom.content) }}</pre>
     </template>
 
@@ -227,6 +228,14 @@ function replyBody(content: string): string {
   background: rgba(160, 125, 224, 0.06);
 }
 
+.remote-badge {
+  margin-left: 6px;
+  font-size: 0.66rem;
+  color: #c98a30;
+  border: 1px solid rgba(201, 138, 48, 0.5);
+  border-radius: 4px;
+  padding: 0 4px;
+}
 .reply-badge {
   display: block;
   font-size: 0.65rem;

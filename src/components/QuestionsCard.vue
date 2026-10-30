@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useSessionStore } from '../stores/session'
+import { canCommand } from '../webCaps'
 import type { PragmaQuestions, PragmaPhase } from '../stores/session'
+import { formatQuestions } from '../questions'
 
 interface Profile {
   label: string
@@ -19,10 +21,11 @@ defineEmits<{ toggle: [] }>()
 
 const store = useSessionStore()
 
+// The questions already arrive grouped with their options and without the model's
+// numbering (protocol.rs `group_questions`): the card adds the numbering.
 const copied = ref(false)
 async function copyAll() {
-  const text = props.data.items.map((q, i) => `Q${i + 1}: ${q}`).join('\n\n')
-  await navigator.clipboard.writeText(text)
+  await navigator.clipboard.writeText(formatQuestions(props.data.items))
   copied.value = true
   setTimeout(() => { copied.value = false }, 1200)
 }
@@ -46,11 +49,14 @@ async function copyAll() {
     <div class="card-collapse" :class="{ 'is-collapsed': collapsed }">
       <div class="card-inner">
         <div class="questions-body">
-          <div v-for="(q, i) in data.items" :key="i" class="question-item">
-            <div class="q-text">{{ i + 1 }}. {{ q }}</div>
+          <div v-for="(q, i) in data.items" :key="i" class="question-item" data-testid="question-item">
+            <div class="q-text"><span class="q-num">{{ i + 1 }}.</span> {{ q.text }}</div>
+            <ul v-if="q.options.length" class="q-options">
+              <li v-for="(o, j) in q.options" :key="j">{{ o }}</li>
+            </ul>
           </div>
         </div>
-        <div v-if="phase === 'awaiting_answers'" class="answer-controls">
+        <div v-if="phase === 'awaiting_answers' && canCommand" class="answer-controls">
           <button class="ctrl-btn ctrl-skip" :disabled="store.running" @click="store.sendControl('SKIP_QUESTIONS', profile!.binary, profile?.configDir ?? undefined)">Skip</button>
         </div>
       </div>
@@ -151,6 +157,18 @@ async function copyAll() {
   font-size: 0.8rem;
   color: var(--text-primary);
   line-height: 1.4;
+  white-space: pre-wrap;
+}
+.q-num { color: var(--text-secondary); font-weight: 600; }
+.q-options {
+  margin: 3px 0 0;
+  padding-left: 22px;
+  font-size: 0.77rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .answer-controls {

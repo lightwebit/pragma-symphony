@@ -17,7 +17,7 @@ Specifically:
 
 ## Enforcement
 
-Reports of unacceptable behaviour can be sent to **pragma@lightweb.it**. The maintainer will review and respond within 7 days. Responses may include closing the issue/PR, removing comments, or blocking the account.
+Reports of unacceptable behaviour can be sent to **lightweb.it@gmail.com**. The maintainer will review and respond within 7 days. Responses may include closing the issue/PR, removing comments, or blocking the account.
 
 ## Scope
 

@@ -1,25 +1,48 @@
 {
   "name": "pragma",
-  "version": "0.1.0",
+  "version": "2.0.0",
+  "license": "MIT",
+  "repository": "https://github.com/lightwebit/pragma-symphony",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc && vite build",
+    "build:web": "vue-tsc && vite build --mode web && node scripts/check-web-bundle.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test": "vitest run"
+    "notices": "node scripts/gen-third-party.mjs",
+    "test": "vitest run",
+    "test:ct": "playwright test -c .autotest/playwright/playwright-ct.config.ts",
+    "e2e:build": "node .autotest/wdio/build.mjs",
+    "e2e:run": "wdio run .autotest/wdio/wdio.conf.js",
+    "screenshots": "wdio run .autotest/wdio/screenshots.conf.js",
+    "e2e": "npm run e2e:build && npm run e2e:run"
   },
   "dependencies": {
+    "@microsoft/signalr": "^10.0.11",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "pinia": "^2.1",
     "vue": "^3.4"
   },
+  "comment:overrides": "@wdio/tauri-service@1.2.0 pins @wdio/native-utils 2.4.0 but imports installMockSyncOverride, which only exists from 2.5.0 — without this override the service fails to load. Remove once the service ships a fixed pin.",
+  "overrides": {
+    "@wdio/native-utils": "2.5.0"
+  },
   "devDependencies": {
+    "@pinia/testing": "^0.1.7",
+    "@playwright/experimental-ct-vue": "^1.62.0",
+    "@playwright/test": "^1.62.0",
     "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^5",
+    "@wdio/cli": "^9.30.0",
+    "@wdio/local-runner": "^9.30.0",
+    "@wdio/mocha-framework": "^9.30.0",
+    "@wdio/spec-reporter": "^9.29.1",
+    "@wdio/tauri-service": "^1.2.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.4",
     "vite": "^5",
     "vitest": "^4.1.5",

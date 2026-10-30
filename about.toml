@@ -1,0 +1,46 @@
+# cargo-about configuration, used to generate the Rust section of THIRD-PARTY-NOTICES.md.
+#
+# The hundreds of crates Pragma Symphony builds on are almost all MIT or Apache-2.0:
+# both require the copyright notice to accompany a *binary distribution*,
+# not only the source. The obligation holds whatever licence Pragma picks for itself.
+#
+# Regenerate with:  npm run notices
+
+# Every target we build for: the bundle covers Windows (msi/exe) and Linux
+# (deb/AppImage), so the notices must also cover the platform-specific crates
+# that do not compile on the machine generating the file.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+
+# Build-dependencies do not end up in the distributed binary: no attribution
+# is required, and including them would only add noise to the file.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Accepted licences. Adding an entry here is a legal decision, not a
+# formality: if `cargo about` stops on a licence that is not listed, evaluate it
+# before allowing it — in particular anything under strong copyleft (GPL/AGPL),
+# which is not compatible with distributing a binary under MIT.
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "OpenSSL",
+    "NCSA",
+    "CDLA-Permissive-2.0",
+    "Ubuntu-font-1.0",
+]

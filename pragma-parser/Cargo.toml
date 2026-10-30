@@ -1,11 +1,11 @@
 [package]
 name = "pragma-parser"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"
 authors = ["lightweb.it <lightweb.it@gmail.com>"]
 description = "Pragma atom parser — reads agent stdout, emits typed atoms as NDJSON"
-repository = "https://github.com/lightwebit/pragma"
+repository = "https://github.com/lightwebit/pragma-symphony"
 
 [lib]
 name = "pragma_parser"
@@ -15,9 +15,6 @@ path = "src/lib.rs"
 name = "pragma-parser"
 path = "src/main.rs"
 
-[[bin]]
-name = "test-parser"
-path = "src/test_parser.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

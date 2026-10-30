@@ -1,5 +1,5 @@
 :root {
-  /* Atom type colors — from docs/ARCHITECTURE.md */
+/* Atom type colors */
   --color-atom-code:    #4A90D9;
   --color-atom-config:  #E8834A;
   --color-atom-markup:  #4CAF7D;
@@ -61,3 +61,19 @@ body {
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: var(--border-color); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #444466; }
+
+/* — Web version — everything under `html.web`, which only the web build sets (main.ts):
+   the desktop sees none of these rules. */
+
+/* 100vh on a phone includes the browser bar: the page would scroll under it. */
+html.web body,
+html.web #app,
+html.web .app-layout { height: 100dvh; }
+
+/* Narrow screen: fields under 16px make the page zoom on iOS on tap. `!important`
+   because each component fixes its own size in a scoped style, which would win here. */
+@media (max-width: 899px) {
+  html.web input,
+  html.web textarea,
+  html.web select { font-size: 16px !important; }
+}

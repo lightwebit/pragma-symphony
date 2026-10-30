@@ -1,45 +1,57 @@
-# Rust / Cargo
-target/
+# Rust build output (workspace-level)
+/target/
 
-# Node / npm
+# Node dependencies
 node_modules/
-dist/
-dist-ssr/
 
-# Tauri
-src-tauri/target/
-src-tauri/WixTools/
+# Vite build output
+dist/
+
+# Tauri generated files (rebuilt on cargo build)
 src-tauri/gen/
 
-# Vue / Vite
-*.local
-.vite/
+# Tauri WiX bundler (downloaded on tauri build)
+src-tauri/WixTools/
 
-# SQLite
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
-*.db
+# Tauri Android/iOS build output (not targeting mobile)
+src-tauri/gen/android/
+src-tauri/gen/apple/
+
+# Temporary icon source (was used for icon generation)
+src-tauri/icon_source.jpg
+
+# Local scratch / personal notes — not part of the codebase
+_NOTE.txt
+V2.txt
+
+# Editor
+.vscode/
+.idea/
+
+# Local Claude Code settings (personal, not part of the codebase)
+.claude/settings.local.json
 
 # OS
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# Editor
-.vscode/settings.json
-.idea/
-*.swp
-*.swo
+# Playwright test run artifacts (component testing — see .autotest/playwright/)
+test-results/
+playwright-report/
+.autotest/**/.cache/
 
-# Claude Code
-.claude/settings.local.json
+# Tauri E2E (see .autotest/wdio/): throwaway ~/.pragma the app runs against,
+# plus the config and capability files generated for the E2E-only build
+.autotest/wdio/.sandbox-home/
+.autotest/wdio/.tauri.e2e.json
+src-tauri/capabilities/wdio.e2e.json
 
-# Env
-.env
-.env.*
-!.env.example
+# VERIFY+REVIEW field test (see .autotest/wdio-review/): throwaway ~/.pragma,
+# seeded with real Claude credentials paths — never committed
+.autotest/wdio-review/.sandbox-home/
 
-# Logs
-*.log
-npm-debug.log*
+
+__SECURITY_PRAGMA.txt
+# Build web (npm run build:web), da lì si pubblica nel repo del sito
+dist-web/
+.autotest/wdio/.sandbox-shots/

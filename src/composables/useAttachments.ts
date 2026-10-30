@@ -1,5 +1,5 @@
 import { ref, computed, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, IS_WEB } from '../platform'
 import { useSessionStore } from '../stores/session'
 import { useSettingsStore } from '../stores/settings'
 
@@ -18,6 +18,8 @@ export function useAttachments(showError: (msg: string) => void) {
 
   watch(workingDir, async val => {
     if (restoringWorkingDir) return
+    // The "last used" folder is a PC setting: it is never written from the web.
+    if (IS_WEB) return
     settings.settings.lastWorkingDir = val || null
     await settings.save()
   })

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '../platform'
 
 export interface Profile {
   label: string
@@ -13,14 +13,32 @@ export interface Settings {
   profiles: Profile[]
   dbPath: string | null
   notificationsEnabled: boolean
+  soundEnabled: boolean
   defaultProfileIndex: number
   exportDir: string | null
   diffAlwaysOpen: boolean
   lastWorkingDir: string | null
+  sessionBranchEnabled: boolean
+  reviewEnabled: boolean
+  e2eEnabled: boolean
+  /** Sharing on the web. Off by default; the access key is kept in plain text in settings.json. */
+  remote: RemoteSettings
+}
+
+export interface RemoteSettings {
+  enabled: boolean
+  hubUrl: string
+  hostSecret: string
+  /** «Allow commands from web». Only counts with a PIN set. */
+  commandsEnabled: boolean
+  /** `salt:sha256(salt+PIN)`, or empty: the plain PIN is not saved. */
+  commandPinHash: string
+  /** The sharing privacy notice has already been shown once. */
+  shareNoticeSeen: boolean
 }
 
 export const useSettingsStore = defineStore('settings', () => {
-  const settings = ref<Settings>({ profiles: [], dbPath: null, notificationsEnabled: false, defaultProfileIndex: 0, exportDir: null, diffAlwaysOpen: false, lastWorkingDir: null })
+  const settings = ref<Settings>({ profiles: [], dbPath: null, notificationsEnabled: false, soundEnabled: true, defaultProfileIndex: 0, exportDir: null, diffAlwaysOpen: false, lastWorkingDir: null, sessionBranchEnabled: false, reviewEnabled: true, e2eEnabled: true, remote: { enabled: false, hubUrl: 'https://noema.tools/hubs/pragma-live', hostSecret: '', commandsEnabled: false, commandPinHash: '', shareNoticeSeen: false } })
   const loaded = ref(false)
   const savedAt = ref(0)
 

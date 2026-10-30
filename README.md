@@ -1,188 +1,159 @@
-# Pragma
+# Pragma Symphony
 
-A local-first desktop frontend for Claude Code — visualize agent sessions as typed, navigable atoms.
+**A desktop cockpit for [Claude Code](https://claude.com/claude-code).** Instead of a terminal scroll, you get a session with phases: Claude analyses, asks, proposes a plan and waits for your approval. When it finishes, Pragma runs your tests and has a second, independent session review the diff.
 
-> **Status: beta** — Windows and Linux supported. macOS planned.
+Free and open source under the MIT licence. Built with Tauri, Rust and Vue 3.
+
+![Pragma Symphony main window](docs/screenshots/main.png)
+
+> Pragma Symphony is an independent project. It is not affiliated with or endorsed by Anthropic, and it is unrelated to other projects named "Symphony".
 
 ---
 
-## What it does
+## Why
 
-Claude Code produces a continuous stream of tool calls, diffs, and text. Pragma parses that stream in real time, classifies each event as a typed atom, and surfaces the relevant information in dedicated panels rather than a raw terminal scroll.
+Claude Code is excellent and its output is a firehose. Pragma adds a light protocol and a structure around it:
 
-A session moves through up to six phases:
+- **You stay in the loop.** Work stops at the plan until you approve it, and step by step if you want.
+- **You see what happened.** Every tool call, diff and file change becomes a typed, searchable atom.
+- **The session does not grade its own homework.** Tests run for real, and the review comes from a fresh process.
+- **Everything stays on your machine.** Sessions live in a local SQLite database, and no account is needed.
 
-| Phase | Description |
-|---|---|
-| Analyzing | Claude examines the task and the working directory |
-| Awaiting Answers | Claude asks clarifying questions before proceeding |
-| Awaiting Approval | Claude presents a plan and waits for confirmation |
-| Running | Tool calls, diffs, and file changes execute |
-| Awaiting Confirmation | Claude requests a final go-ahead before closing |
-| Complete | Session finished; export available |
+It does not replace Claude Code: it runs your installed `claude` binary with your own login, so you need a working Claude Code installation.
 
 ---
 
 ## Features
 
-- **Three-panel layout** — session list · structured pragma cards · raw atom stream
-- **Typed atoms** — `FileTouch`, `Diff`, `ToolUse`, `Error`, `AgentNote`, `UserReply`, `PragmaEvent`
-- **Structured cards** — AnalysisCard, QuestionsCard, PlanCard, TestsCard, ReportCard, ClosingCard
-- **Multi-turn sessions** — resume a previous session and continue in context
-- **Profiles** — multiple Claude Code installations with separate binary paths and config dirs
-- **Model selection** — Sonnet (default) or Opus per session
-- **File attachments** — files are copied into `{workingDir}/pragmadocs/` and passed to the agent
-- **Working directory trust** — explicit user approval before any directory is used
-- **Session history** — SQLite storage with full-text search
-- **Export** — JSON or Markdown export from the UI or CLI
-- **Focus mode** — filters noise, shows only structured pragma events
-- **Dark / light theme**
+**Sessions**
+- Phases: analysis, questions, plan, execution, report, closing
+- Parallel sessions, one per working directory
+- Projects, with session history, full-text search and JSON or Markdown export
+- Scheduled sessions: a prompt and a time, and it starts on its own
+- A per-project to-do list
+- Model per session (Sonnet, Opus, Fable), multiple Claude Code profiles, file attachments
+
+**Quality gates**
+- **VERIFY** runs your test command after the report. A baseline of known failures means only *new* failures block
+- **REVIEW** opens a separate Claude session on the full diff, with your project's invariants and a security pass on sensitive paths. You choose Fix or Accept. It runs after every finished session in a git repository and costs one review each time: switch it off in Settings if you prefer
+
+**Project tools**
+- **E2E**: pick a runner, describe the scenarios, generate and run a suite
+- **Live**: build or start your project with streaming output
+- **Pipeline**: local build, test and publish steps, fail-fast
+
+**On the go**
+- Follow a session from your phone through a temporary link, and optionally send commands protected by a PIN. See [Web sharing](#web-sharing)
+
+| Plan approval | Code review | From your phone |
+|---|---|---|
+| ![Plan](docs/screenshots/plan.png) | ![Review](docs/screenshots/review.png) | ![Phone](docs/screenshots/web-phone.png) |
+
+More in the [guide](docs/GUIDE.md) and the [screenshot gallery](docs/screenshots/README.md).
 
 ---
 
-## Screenshots
+## Build from source
 
-<img src="./docs/screenshots/Home.png" alt="Pragma home — new session screen" width="800" />
-<p><em>Start screen — set working directory, attach files, choose Claude profile</em></p>
+There are no prebuilt binaries: you build the app yourself. It takes a few minutes the first time.
 
-<img src="./docs/screenshots/Prompt_advanced.png" alt="Prompt modal with advanced settings" width="800" />
-<p><em>Advanced prompt — thinker model, token limits, auto-continue, titles generation</em></p>
+**You need**
 
-<img src="./docs/screenshots/Questions.png" alt="Pragma clarification questions dialog" width="800" />
-<p><em>Clarification flow — Pragma surfaces Claude's questions before execution starts</em></p>
+- [Rust](https://rustup.rs) (stable)
+- [Node.js](https://nodejs.org) 22
+- [Claude Code](https://claude.com/claude-code), installed and logged in. Pragma looks for `claude` on your `PATH`, or you can set the path in a profile
+- **Windows:** the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and WebView2 (included in Windows 11)
+- **Linux** (Debian/Ubuntu):
 
-<img src="./docs/screenshots/Sidebar_complete.png" alt="Active session with atom stream and sidebar" width="800" />
-<p><em>Session view — color-coded atom stream, analysis panel, live file tracking</em></p>
+  ```sh
+  sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+  ```
 
-<img src="./docs/screenshots/Settings_1.png" alt="Claude profiles configuration" width="800" />
-<p><em>Claude profiles — map named profiles to local .claude.env files</em></p>
+macOS is not tested. It may work, but no one has tried.
 
-<img src="./docs/screenshots/Usage.png" alt="Token usage statistics" width="800" />
-<p><em>Usage panel — context window, current session and total token consumption</em></p>
+**Then**
 
-<img src="./docs/screenshots/Focus_1.png" alt="Focus mode — filtered atom view" width="800" />
-<p><em>Focus mode — filter atom stream by type to cut noise during long sessions</em></p>
-
----
-
-## Requirements
-
-- [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude` binary in PATH or configured via profile)
-- Windows 10+ or Linux (x86_64)
-
----
-
-## Download
-
-Pre-built binaries are available at **[noema.tools/download](https://noema.tools/download)**.
-
-SHA-256 checksums are published alongside each release on the [GitHub Releases](https://github.com/lightwebit/pragma/releases) page.
-
-To build from source, see [Building](#building).
-
----
-
-## Building
-
-Prerequisites:
-
-- [Rust](https://rustup.rs) stable toolchain
-- [Node.js](https://nodejs.org) v22
-- [Tauri CLI v2](https://tauri.app/start/prerequisites/) — `cargo install tauri-cli --version "^2"`
-
-```bash
-# Install frontend dependencies
+```sh
+git clone https://github.com/lightwebit/pragma-symphony.git
+cd pragma-symphony
 npm install
-
-# Development (hot-reload)
-npm run tauri:dev
-
-# Production build — output in src-tauri/target/release/bundle/
 npm run tauri:build
 ```
 
-Refer to the [Tauri documentation](https://tauri.app/start/) for platform-specific build dependencies (WebKit on Linux, etc.).
+Installers end up in `target/release/bundle/`. To run from source with hot reload, use `npm run tauri:dev`.
 
 ---
 
-## Data directory
+## What you should know before using it
 
-Pragma stores all runtime data in `~/.pragma/`:
+**Sessions run without permission prompts.** Pragma starts Claude Code with `--dangerously-skip-permissions`, on every session: a graphical app has no terminal in which to answer those prompts. Claude can therefore read, write and run commands in the working directory without asking. Pragma's plan approval is a checkpoint in the protocol, not a sandbox. Use it on code under version control, and do not point it at folders you would not hand over.
+
+**Your data is stored unencrypted in `~/.pragma/`.**
 
 | Path | Contents |
 |---|---|
-| `~/.pragma/pragma.db` | Session history, atoms, full-text index |
-| `~/.pragma/settings.json` | App settings and profiles |
-| `~/.pragma/trusted_dirs.json` | User-approved working directories |
-| `~/.pragma/prompts/<label>.txt` | External prompt files |
+| `pragma.db` | Projects, sessions, atoms, full-text index |
+| `settings.json` | App settings and profiles |
+| `trusted_dirs.json` | Working directories used so far |
+| `prompts/<label>.txt` | Profile prompts |
+
+The folder is restricted to your user account (owner-only ACL on Windows, `chmod 700` on Linux). That keeps other users out, not someone with your disk: use full-disk encryption for that. Claude Code keeps its own transcripts of the same sessions under its config directory.
+
+**What leaves your machine.** Claude Code talks to Anthropic as usual. Pragma itself sends nothing, with no telemetry and no analytics. The only exception is web sharing, which is off by default.
+
+**Output styles.** The protocol is injected with `--append-system-prompt` and has only been tested with the CLI's default output style. With a custom `outputStyle` the structured cards may not appear; Settings warns you.
 
 ---
 
-## Architecture
+## Web sharing
 
-| Layer | Technology |
+Web sharing shows your Pragma in a browser, through a relay hosted on noema.tools. It needs a **personal access key, available on request**: write to lightweb.it@gmail.com. The relay is a hosted service and its code is not part of this repository.
+
+While you share, anyone with the link can watch your projects and sessions, so treat it like a password. The link dies when you stop sharing or close Pragma. Commands from the web are a separate switch and need a PIN that only you know. Traffic is encrypted in transit but not end to end: the relay handles it in clear to route it and stores none of it. Details are in the [privacy policy](https://noema.tools/pragma-symphony/privacy).
+
+---
+
+## How much does it cost in tokens?
+
+About the same as Claude Code alone. On the same small task, repeated three times, quality was identical and the cost difference stayed within noise. Full numbers and limits are in [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
+---
+
+## CLI
+
+`pragma-cli` (binary `pragma`) wraps an agent command, turns its output into typed atoms in real time and saves the session to the same database:
+
+```sh
+cargo run -p pragma-cli -- run -- claude -p --output-format stream-json --verbose "create hello.rs"
+```
+
+| Command | Description |
 |---|---|
-| Desktop shell | [Tauri v2](https://tauri.app) |
-| Backend | Rust (stable) |
-| Frontend | Vue 3 + Pinia + Vite + TypeScript |
-| Storage | SQLite (WAL + FTS5) via `rusqlite` |
-| Parser | `pragma-parser` (internal Rust crate) |
-| CLI wrapper | `pragma-cli` (internal Rust crate) |
-
-Data flow:
-
-```
-Claude Code (local process)
-  ↓ structured JSON stream (stdout)
-Pragma backend — Rust parser
-  ↓ typed atoms via Tauri IPC
-Pragma UI — Vue 3
-  ↓ session storage
-SQLite database (local device only)
-```
+| `pragma run -- <command> [args...]` | Wraps a command and creates a session |
+| `pragma history` | Lists every session that ran |
+| `pragma export <session-id>` | Exports a session as JSON to stdout |
 
 ---
 
 ## Project structure
 
 ```
-pragma/
-├── pragma-parser/      # Rust crate — parses agent stdout into typed atoms
-├── pragma-cli/         # Rust crate — CLI wrapper binary
-├── src-tauri/          # Tauri backend (Rust) — Tauri commands, IPC, storage
-├── src/                # Vue 3 frontend — App.vue, components, Pinia store
-├── docs/               # Technical documentation
-└── Cargo.toml          # Workspace root
+pragma-parser/   Rust crate: parses agent output into typed atoms, SQLite storage, settings
+pragma-cli/      Rust crate: the `pragma` command-line wrapper
+src-tauri/       Tauri backend: commands, protocol, VERIFY, REVIEW, scheduler
+src/             Vue 3 frontend: components, Pinia stores, web bridge
+.autotest/       Component tests (Playwright) and end-to-end tests on the real app (WebdriverIO)
+docs/            Guide, benchmark, screenshots
 ```
 
----
-
-## Security model and `--dangerously-skip-permissions`
-
-Pragma automatically passes `--dangerously-skip-permissions` to Claude Code on every session. This flag disables Claude Code's built-in tool-call confirmation prompts, which is required for unattended agent execution inside the Pragma UI.
-
-**What this means:** Claude Code will execute file writes, shell commands, and other tool calls without asking for confirmation on each step. Pragma replaces that confirmation flow with its own approve/stop controls in the UI.
-
-**What to do:** only point Pragma at working directories you own and trust. Pragma records every approved directory in `~/.pragma/trusted_dirs.json`.
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ---
 
-## Privacy
+## Credits
 
-Pragma processes all data locally. No telemetry, no analytics, no external connections.
-
-Full details: [noema.tools/legal/privacy-pragma](https://noema.tools/legal/privacy-pragma)
-
----
+The end-of-session sound comes from [Interface Sounds](https://kenney.nl/assets/interface-sounds) by Kenney (CC0). Third-party licences are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
-
-Pragma is not affiliated with Anthropic. Claude Code is a product of Anthropic, PBC.
-
----
-
-## Part of noema.tools
-
-Pragma is one of the tools in the [noema.tools](https://noema.tools) ecosystem.
+MIT — see [LICENSE](LICENSE). Made by [Paolo Tanzi](https://noema.tools/pragma).

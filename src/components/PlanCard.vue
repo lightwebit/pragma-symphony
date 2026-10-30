@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useSessionStore } from '../stores/session'
-import type { PragmaPlan, PragmaStepComplete, PragmaPhase } from '../stores/session'
+import { canCommand } from '../webCaps'
+import type { PragmaPlan, PragmaStepComplete, PragmaPhase, SessionModel } from '../stores/session'
 
 interface Profile {
   label: string
@@ -22,7 +23,7 @@ defineEmits<{ toggle: [] }>()
 const store = useSessionStore()
 const modifyText = ref('')
 const showModify = ref(false)
-const opusDismissed = ref(false)
+const suggestionDismissed = ref(false)
 const errorMsg = ref<string | null>(null)
 let errorTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -32,13 +33,18 @@ function showError(msg: string) {
   errorTimer = setTimeout(() => { errorMsg.value = null }, 4000)
 }
 
-const showOpusSuggestion = computed(() =>
+const showModelSuggestion = computed(() =>
   !props.collapsed
-  && !opusDismissed.value
+  && !suggestionDismissed.value
   && store.sessionModel === 'sonnet'
   && props.data.steps.length > 5
   && props.phase === 'awaiting_approval'
 )
+
+function pickModel(model: SessionModel) {
+  store.sessionModel = model
+  suggestionDismissed.value = true
+}
 
 const copied = ref(false)
 async function copyAll() {
@@ -93,14 +99,23 @@ function submitModify() {
 
     <div class="card-collapse" :class="{ 'is-collapsed': collapsed }">
       <div class="card-inner">
-        <div v-if="showOpusSuggestion" class="opus-banner">
-          <span class="opus-banner-text">⚡ Complex task ({{ data.steps.length }} steps) — consider Opus for better results</span>
-          <div v-if="phase === 'awaiting_approval'" class="opus-banner-note">
+        <div v-if="showModelSuggestion && canCommand" class="model-banner">
+          <span class="model-banner-text">⚡ Complex task ({{ data.steps.length }} steps) — a stronger model may give better results</span>
+          <div v-if="phase === 'awaiting_approval'" class="model-banner-note">
             Model change applies to new sessions only — approving will continue with the current model.
           </div>
-          <div class="opus-banner-actions">
-            <button class="opus-btn-switch" @click="store.sessionModel = 'opus'; opusDismissed = true">Switch to Opus</button>
-            <button class="opus-btn-dismiss" @click="opusDismissed = true">Dismiss</button>
+          <div class="model-banner-actions">
+            <button
+              class="model-btn-switch"
+              title="Opus — strong on architecture and refactoring"
+              @click="pickModel('opus')"
+            >Switch to Opus</button>
+            <button
+              class="model-btn-switch is-fable"
+              title="Fable — the most capable model; slower and roughly twice the cost of Opus"
+              @click="pickModel('fable')"
+            >Switch to Fable</button>
+            <button class="model-btn-dismiss" @click="suggestionDismissed = true">Dismiss</button>
           </div>
         </div>
 
@@ -122,7 +137,7 @@ function submitModify() {
           <div v-if="errorMsg" class="plan-error-msg">⚠ {{ errorMsg }}</div>
         </Transition>
 
-        <div v-if="phase === 'awaiting_approval'" class="approval-controls">
+        <div v-if="phase === 'awaiting_approval' && canCommand" class="approval-controls">
           <button class="ctrl-btn ctrl-ok" :disabled="store.running" @click="approve">Approve</button>
           <button class="ctrl-btn ctrl-modify" :disabled="store.running" @click="showModify = !showModify">Modify</button>
           <span v-if="store.running" class="approval-waiting">
@@ -131,7 +146,7 @@ function submitModify() {
           </span>
         </div>
 
-        <div v-if="showModify" class="modify-form">
+        <div v-if="showModify && canCommand" class="modify-form">
           <textarea
             v-model="modifyText"
             class="modify-input"
@@ -358,7 +373,7 @@ function submitModify() {
 }
 .modify-input:focus { border-color: var(--color-atom-code); }
 
-.opus-banner {
+.model-banner {
   padding: 8px 10px;
   border-top: 1px solid var(--border-color);
   background: rgba(160, 125, 224, 0.07);
@@ -367,25 +382,25 @@ function submitModify() {
   gap: 6px;
 }
 
-.opus-banner-text {
+.model-banner-text {
   font-size: 0.78rem;
   color: #a07de0;
   line-height: 1.4;
 }
 
-.opus-banner-note {
+.model-banner-note {
   font-size: 0.72rem;
   color: var(--text-secondary);
   line-height: 1.4;
   font-style: italic;
 }
 
-.opus-banner-actions {
+.model-banner-actions {
   display: flex;
   gap: 6px;
 }
 
-.opus-btn-switch {
+.model-btn-switch {
   padding: 3px 10px;
   background: rgba(160, 125, 224, 0.2);
   border: 1px solid rgba(160, 125, 224, 0.4);
@@ -397,9 +412,16 @@ function submitModify() {
   cursor: pointer;
   transition: background 0.12s;
 }
-.opus-btn-switch:hover { background: rgba(160, 125, 224, 0.32); }
+.model-btn-switch:hover { background: rgba(160, 125, 224, 0.32); }
 
-.opus-btn-dismiss {
+.model-btn-switch.is-fable {
+  background: rgba(224, 158, 90, 0.18);
+  border-color: rgba(224, 158, 90, 0.4);
+  color: #e09e5a;
+}
+.model-btn-switch.is-fable:hover { background: rgba(224, 158, 90, 0.3); }
+
+.model-btn-dismiss {
   padding: 3px 10px;
   background: none;
   border: 1px solid var(--border-color);
@@ -410,5 +432,5 @@ function submitModify() {
   cursor: pointer;
   transition: color 0.12s;
 }
-.opus-btn-dismiss:hover { color: var(--text-primary); }
+.model-btn-dismiss:hover { color: var(--text-primary); }
 </style>

@@ -1,61 +1,135 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import { listen } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
-import { invoke } from '@tauri-apps/api/core'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { listen, invoke, IS_WEB, onWebResync } from './platform'
 import { useSessionStore } from './stores/session'
+import type { SessionModel, PipelineStep } from './stores/session'
 import { useSettingsStore } from './stores/settings'
+import { useProjectStore } from './stores/projects'
+import { useScheduledStore } from './stores/scheduled'
+import { useTodoStore } from './stores/todos'
 import { useTheme } from './composables/useTheme'
 import { usePanelResize } from './composables/usePanelResize'
 import { useAttachments } from './composables/useAttachments'
+import { useToasts } from './composables/useToasts'
+import { useSessionNotifications } from './composables/useSessionNotifications'
+import { useGlobalKeys } from './composables/useGlobalKeys'
 import AtomStream from './components/AtomStream.vue'
 import SessionPanel from './components/SessionPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import PragmaPanel from './components/PragmaPanel.vue'
 import HelpPanel from './components/HelpPanel.vue'
 import UsageModal from './components/UsageModal.vue'
+import TodoModal from './components/TodoModal.vue'
 import ComposerModal from './components/ComposerModal.vue'
-import {
-  TOAST_ERROR_DURATION_MS, TOAST_EXPORT_DURATION_MS, AUTO_CONFIRM_DELAY_MS,
-  LS_FOCUS_MODE, LS_WORKING_DIR,
-} from './PRAGMA_CONSTANTS'
+import E2eModal from './components/E2eModal.vue'
+import LiveModal from './components/LiveModal.vue'
+import PipelineModal from './components/PipelineModal.vue'
+import AppHeader from './components/AppHeader.vue'
+import AppFooter from './components/AppFooter.vue'
+import PromptBar from './components/PromptBar.vue'
+import WorkdirBar from './components/WorkdirBar.vue'
+import ErrorBanner from './components/ErrorBanner.vue'
+import CacheExpiredBanner from './components/CacheExpiredBanner.vue'
+import { expiredCache } from './cacheExpiry'
+import { buildResumePrompt } from './resumeSummary'
+import { buildAnswers } from './questions'
+import ToastStack from './components/ToastStack.vue'
+import DragOverlay from './components/DragOverlay.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import WebLinkGate from './components/WebLinkGate.vue'
+import { LS_FOCUS_MODE, LS_WORKING_DIR } from './PRAGMA_CONSTANTS'
+import { canCommand, showDesktopOnly } from './webCaps'
+import { useMobileLayout } from './composables/useMobileLayout'
+import { tabAfterSessionChange, pragmaWantsAttention } from './mobileTabs'
+import type { MobileTab } from './mobileTabs'
 
 const session = useSessionStore()
 const settings = useSettingsStore()
+const projects = useProjectStore()
+const scheduled = useScheduledStore()
+const todos = useTodoStore()
+
+const sessionPanelRef = ref<InstanceType<typeof SessionPanel> | null>(null)
 
 const { isDark, applyTheme, toggleTheme } = useTheme()
 const { leftWidth, rightWidth, startDrag } = usePanelResize()
+const {
+  exportToast, errorToast,
+  showExportToast, showErrorToast,
+} = useToasts()
+
+useSessionNotifications()
+
+// — Web on a narrow screen: one panel at a time, chosen from the tabs at the bottom —
+const { mobile } = useMobileLayout()
+const mobileTab = ref<MobileTab>(session.sessionId ? 'stream' : 'sessions')
+watch(() => session.sessionId, (id) => { mobileTab.value = tabAfterSessionChange(mobileTab.value, id) })
+const pragmaAttention = computed(() => pragmaWantsAttention(session.pragmaPhase, session.autoConfirmAt))
 
 const focusMode = ref(localStorage.getItem(LS_FOCUS_MODE) !== 'false')
 watch(focusMode, v => localStorage.setItem(LS_FOCUS_MODE, String(v)))
 
-// — Toasts —
-const exportToast = ref<string | null>(null)
-let exportToastTimer: ReturnType<typeof setTimeout> | null = null
-const errorToast = ref<string | null>(null)
-let errorToastTimer: ReturnType<typeof setTimeout> | null = null
-const settingsSavedToast = ref(false)
-let settingsSavedTimer: ReturnType<typeof setTimeout> | null = null
-
-function showErrorToast(msg: string) {
-  if (errorToastTimer) clearTimeout(errorToastTimer)
-  errorToast.value = msg
-  errorToastTimer = setTimeout(() => { errorToast.value = null }, TOAST_ERROR_DURATION_MS)
-}
-
-function showExportToast(path: string) {
-  if (exportToastTimer) clearTimeout(exportToastTimer)
-  exportToast.value = path
-  exportToastTimer = setTimeout(() => { exportToast.value = null }, TOAST_EXPORT_DURATION_MS)
-}
-
 // — Attachments & working dir —
 const { workingDir, attachments, attachmentExists, pickWorkingDir, attachFile, removeAttachment, handleDroppedPaths } = useAttachments(showErrorToast)
+
+// Generating the E2E scripts is not a blind one-shot: the prepared prompt ends up
+// in the composer like any other request, so the session is visible and correctable.
+function onE2eGenerate(generatedPrompt: string) {
+  prompt.value = generatedPrompt
+  composerOpen.value = true
+}
+
+// — Cache expired before a resume —
+// `now` advances at intervals: expiry is a matter of time passing, not of
+// events, and a minute's delay in the warning changes nothing.
+const now = ref(Date.now())
+const nowTimer = setInterval(() => { now.value = Date.now() }, 30_000)
+onUnmounted(() => clearInterval(nowTimer))
+
+const cacheWarning = computed(() =>
+  !session.sessionId || session.running ? null : expiredCache(session.sessionCache, now.value),
+)
+const cacheBannerDismissed = ref(new Set<string>())
+// The banner only on sessions paused on the protocol, where a click on Approve/Continue
+// starts the resume. For a free prompt on a closed session there is the warning in the composer.
+const cacheBanner = computed(() => {
+  const id = session.sessionId
+  if (!id || !cacheWarning.value || cacheBannerDismissed.value.has(id)) return null
+  return session.isActive(id) ? cacheWarning.value : null
+})
+function dismissCacheBanner() {
+  const id = session.sessionId
+  if (id) cacheBannerDismissed.value = new Set(cacheBannerDismissed.value).add(id)
+}
+
+// The session the new one is about to continue. It is released from the one-session-per-directory
+// guard only on send: closing the composer without sending anything must not change its state.
+const supersedeId = ref<string | null>(null)
+watch(() => session.sessionId, (id) => { if (id) supersedeId.value = null })
+
+function startFreshWithSummary() {
+  const id = session.sessionId
+  const old = id ? session.sessions[id] : null
+  if (!id || !old) return
+  const summary = buildResumePrompt(old)
+  const typed = prompt.value.trim()
+  const title = old.title
+  const model = old.model
+  session.newSession()
+  session.sessionTitle = title ? `${title} (cont.)` : ''
+  supersedeId.value = id
+  prompt.value = typed ? `${summary}\n\n## New instruction\n${typed}` : summary
+  selectedModel.value = model
+  composerOpen.value = true
+}
 
 // — Modals —
 const showSettings = ref(false)
 const showUsage = ref(false)
+const showTodo = ref(false)
+const showE2e = ref(false)
+const showLive = ref(false)
+const showPipeline = ref(false)
 const showHelp = ref(false)
 const composerOpen = ref(false)
 const confirmNewSession = ref(false)
@@ -63,8 +137,10 @@ const dragOver = ref(false)
 
 // — Composer state (shared with ComposerModal via v-model) —
 const prompt = ref('')
-const selectedModel = ref<'sonnet' | 'opus'>('sonnet')
+const selectedModel = ref<SessionModel>('sonnet')
 const autoConfirm = ref(true)
+// One answer per question, when the model asked more than one.
+const answers = ref<string[]>([])
 
 // — Profiles —
 const profileIdx = ref(0)
@@ -85,11 +161,6 @@ async function doExportMd() {
   if (path) showExportToast(path)
 }
 
-function openUrl(url: string | null | undefined) {
-  if (!url) return
-  invoke('open_url', { url }).catch(console.error)
-}
-
 function onSettingsClose() {
   showSettings.value = false
   settings.load()
@@ -97,51 +168,99 @@ function onSettingsClose() {
 
 // — Composer open —
 function openComposer() {
+  if (!canCommand.value) return
   if (session.running && session.pragmaPhase !== 'awaiting_answers') return
   composerOpen.value = true
 }
 
 // — New session confirm —
+// The warning only makes sense on the draft (sessionId === null): there the attachments are
+// not saved anywhere yet and "+" would really lose them. On a session
+// already started the attachments are already persisted — "+" only moves the
+// focus to an empty draft, the session left behind stays intact.
 function tryNewSession() {
-  if (attachments.value.length > 0) { confirmNewSession.value = true; return }
+  if (!session.sessionId && attachments.value.length > 0) { confirmNewSession.value = true; return }
   session.newSession()
 }
 
 function doConfirmNewSession() {
   confirmNewSession.value = false
-  attachments.value = []
   session.newSession()
 }
 
 // — Submit (called by ComposerModal @submit) —
-async function submit(model: 'sonnet' | 'opus', ac: boolean) {
+async function submit(model: SessionModel, ac: boolean, runAt: string | null) {
   const text = prompt.value.trim()
-  if (!text) return
 
   if (session.pragmaPhase === 'awaiting_answers') {
     const p = profiles.value[profileIdx.value]
     if (!p) return
-    await session.sendAnswers({ Q1: text }, p.binary, p.configDir ?? undefined, workingDir.value || undefined)
+    const reply = buildAnswers(answers.value, text)
+    if (!Object.keys(reply).length) return
+    await session.sendAnswers(reply, p.binary, p.configDir ?? undefined, workingDir.value || undefined)
+    prompt.value = ''
+    answers.value = []
+    composerOpen.value = false
+    return
+  }
+  if (!text) return
+
+  const filesToSave = [...attachments.value]
+  let fullPrompt = text
+  if (filesToSave.length > 0) {
+    fullPrompt += '\n\nAttached files in .pragmadocs/:\n' + filesToSave.map(f => `- ${f}`).join('\n')
+  }
+  const projectId = projects.currentProjectId ?? ''
+  if (!projectId) { session.lastError = 'No project selected. Create a project first.'; return }
+
+  // Scheduled: it occupies nothing until it starts, so neither the
+  // working dir/project guard nor the choice of a profile is required now —
+  // the profile is resolved at expiry from the current settings (see scheduler.rs
+  // fire_one), so a session can be scheduled even before configuring one.
+  if (runAt) {
+    const p = profiles.value[profileIdx.value]
+    try {
+      await scheduled.create({
+        projectId,
+        prompt: fullPrompt,
+        runAt,
+        workingDir: workingDir.value || null,
+        profileLabel: p?.label ?? null,
+        model,
+        attachments: filesToSave,
+        title: session.sessionTitle || null,
+        stepByStep: !ac,
+        autoConfirm: ac,
+      })
+    } catch (e: any) {
+      session.lastError = String(e)
+      return
+    }
     prompt.value = ''
     composerOpen.value = false
+    selectedModel.value = 'sonnet'
     return
   }
 
   if (session.running || noProfiles.value) return
   const p = profiles.value[profileIdx.value]
-  const filesToSave = [...attachments.value]
+  if (supersedeId.value && !session.sessionId) session.supersedeSession(supersedeId.value)
   session.sessionAttachments = []
-  let fullPrompt = text
-  if (filesToSave.length > 0) {
-    fullPrompt += '\n\nAttached files in .pragmadocs/:\n' + filesToSave.map(f => `- ${f}`).join('\n')
-  }
   try {
-    await session.startSession(
-      fullPrompt, p.binary, p.configDir ?? undefined,
-      workingDir.value || undefined, p.label || undefined,
-      session.sessionTitle || undefined, model,
-      session.sessionId ?? undefined, filesToSave, !ac,
-    )
+    await session.startSession({
+      prompt: fullPrompt,
+      binary: p.binary,
+      projectId,
+      configDir: p.configDir,
+      workingDir: workingDir.value || null,
+      profileLabel: p.label,
+      title: session.sessionTitle || null,
+      model,
+      resumeId: session.sessionId,
+      attachments: filesToSave,
+      stepByStep: !ac,
+      autoConfirm: ac,
+    })
   } catch (e: any) {
     session.lastError = String(e)
     session.sessionAttachments = filesToSave
@@ -150,64 +269,144 @@ async function submit(model: 'sonnet' | 'opus', ac: boolean) {
   prompt.value = ''
   composerOpen.value = false
   selectedModel.value = 'sonnet'
-  autoConfirm.value = false
 }
 
-// — Keyboard —
-function handleGlobalKey(e: KeyboardEvent) {
-  if (e.ctrlKey && e.key === 'k') { e.preventDefault(); openComposer() }
-  if (e.ctrlKey && e.key === 's') { e.preventDefault(); showSettings.value = true }
+useGlobalKeys({
+  openComposer,
+  openSettings: () => { if (showDesktopOnly) showSettings.value = true },
+})
+
+// — Missed scheduled sessions —
+// Driven by the presence of `missed` rows in the shared store, not by a local
+// flag: when the last one is resolved (Discard/Reschedule/Run now) the modal
+// disappears by itself, with no need for an explicit "close".
+const currentMissed = computed(() => scheduled.items.find(s => s.status === 'missed') ?? null)
+const missedRescheduleAt = ref('')
+const missedBusy = ref(false)
+
+watch(currentMissed, (m) => { if (!m) missedRescheduleAt.value = '' })
+
+async function discardMissed() {
+  if (!currentMissed.value) return
+  missedBusy.value = true
+  try {
+    await scheduled.cancel(currentMissed.value.id)
+  } finally {
+    missedBusy.value = false
+  }
+}
+
+async function runMissedNow() {
+  if (!currentMissed.value) return
+  missedBusy.value = true
+  try {
+    await scheduled.runNow(currentMissed.value.id)
+  } catch (e: any) {
+    session.lastError = String(e)
+  } finally {
+    missedBusy.value = false
+  }
+}
+
+async function rescheduleMissed() {
+  if (!currentMissed.value || !missedRescheduleAt.value) return
+  const iso = new Date(missedRescheduleAt.value).toISOString()
+  if (new Date(iso).getTime() <= Date.now()) { session.lastError = 'Pick a time in the future.'; return }
+  missedBusy.value = true
+  try {
+    await scheduled.reschedule(currentMissed.value.id, iso)
+    missedRescheduleAt.value = ''
+  } finally {
+    missedBusy.value = false
+  }
 }
 
 // — Watches —
+// Auto-confirm lives in the store, per session: here it would only see the focused one,
+// and with parallel sessions it would mean continuing one only because
+// you passed over it — or not continuing one because you were looking elsewhere.
 watch(() => session.pragmaPhase, (phase) => {
-  if (phase === 'awaiting_answers') composerOpen.value = true
-  if (phase === 'awaiting_confirmation' && autoConfirm.value) {
-    setTimeout(() => {
-      if (session.pragmaPhase === 'awaiting_confirmation' && autoConfirm.value) {
-        const p = profiles.value[profileIdx.value]
-        if (p) session.sendControl('CONTINUE', p.binary, p.configDir ?? undefined, workingDir.value || undefined)
-      }
-    }, AUTO_CONFIRM_DELAY_MS)
+  if (phase === 'awaiting_answers' && canCommand.value) {
+    answers.value = []
+    composerOpen.value = true
   }
 })
 
 watch(() => session.lastError, err => { if (err) showErrorToast(err) })
 
-async function doSaveSession() {
-  await session.saveCurrentSession()
-  if (settingsSavedTimer) clearTimeout(settingsSavedTimer)
-  settingsSavedToast.value = true
-  settingsSavedTimer = setTimeout(() => { settingsSavedToast.value = false }, 2000)
+// Bug found live in the field (parallel sessions): with the
+// "only if empty" guard the first selected project fixed workingDir
+// forever — switching to a SECOND project with a different working dir never
+// realigned it, so a new session silently started in the
+// directory of the wrong project (or was refused as "session already
+// active" because it mistakenly shared the dir of the background session).
+// It now realigns on every *real* project change (`currentProjectId`, not
+// the whole object — which changes identity even for a save unrelated
+// to the switch), not only when `workingDir` was empty.
+watch(
+  () => projects.currentProjectId,
+  (id, previousId) => {
+    if (id === previousId) return
+    workingDir.value = projects.currentProject?.workingDir ?? ''
+  },
+)
+
+// The steps only serve to decide whether the CI button is off or ready: they
+// reload on project change and after a save from the popup.
+const pipelineSteps = ref<PipelineStep[]>([])
+
+async function loadPipelineSteps() {
+  const id = projects.currentProjectId
+  if (!id) { pipelineSteps.value = []; return }
+  try {
+    pipelineSteps.value = await invoke<PipelineStep[]>('get_pipeline_steps', { projectId: id })
+  } catch {
+    pipelineSteps.value = []
+  }
 }
 
-watch(() => session.running, async (running, wasRunning) => {
-  if (wasRunning && !running && settings.settings.notificationsEnabled) {
-    let granted = await isPermissionGranted()
-    if (!granted) granted = (await requestPermission()) === 'granted'
-    if (!granted) return
-    const title = session.sessionTitle || 'Session complete'
-    const body = session.lastError ? `Error: ${session.lastError}` : 'Session finished.'
-    sendNotification({ title: `Pragma — ${title}`, body })
-  }
-})
+watch(() => projects.currentProjectId, loadPipelineSteps, { immediate: true })
 
+// The checklist reloads on project change even with the popup closed: the count
+// on the button must already be right before anyone opens it, otherwise it does not
+// remind anyone of anything. Silent failure — it is a counter, not a gate.
 watch(
-  () => [session.sessionTitle, session.running] as const,
-  ([t, running]) => {
-    const winTitle = t ? (running ? `▶ ${t} — Pragma` : `${t} — Pragma`) : 'Pragma'
-    getCurrentWindow().setTitle(winTitle)
-  },
+  () => projects.currentProjectId,
+  (id) => { todos.refresh(id ?? null).catch(() => {}) },
   { immediate: true },
 )
+
+// — Web: re-read everything from the PC —
+// After a reconnection, or if events were lost, the page cannot trust what
+// it has: it re-reads settings, projects, lists and the open session. On the
+// desktop there is never anything to realign, the memory is its own.
+if (IS_WEB) {
+  onWebResync(async () => {
+    await settings.load()
+    await projects.load()
+    const pid = projects.currentProjectId
+    if (pid) {
+      await Promise.allSettled([
+        session.fetchSavedSessions(pid),
+        scheduled.refresh(pid),
+        todos.refresh(pid),
+      ])
+    }
+    if (session.sessionId) await session.refreshFromHost(session.sessionId)
+  })
+}
 
 // — Mount —
 onMounted(async () => {
   await settings.load()
+  await projects.load()
+  await session.initGlobalListeners()
+  await scheduled.initListeners()
   applyTheme(isDark.value)
 
   const lsDir = localStorage.getItem(LS_WORKING_DIR)
-  if (lsDir !== null) {
+  // The migration from localStorage writes into the PC's settings: never from the web.
+  if (lsDir !== null && !IS_WEB) {
     workingDir.value = lsDir
     settings.settings.lastWorkingDir = lsDir || null
     await settings.save()
@@ -216,7 +415,6 @@ onMounted(async () => {
     workingDir.value = settings.settings.lastWorkingDir ?? ''
   }
 
-  window.addEventListener('keydown', handleGlobalKey)
   await listen<{ paths: string[] }>('tauri://drag-drop', (e) => handleDroppedPaths(e.payload.paths))
   await listen('tauri://drag-enter', () => { dragOver.value = true })
   await listen('tauri://drag-leave', () => { dragOver.value = false })
@@ -230,31 +428,76 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="app-layout">
-    <header class="header">
-      <div class="header-top">
-        <span class="logo">pragma</span>
-        <button class="new-btn" title="New session" :disabled="session.running" @click="tryNewSession()">+</button>
-        <input v-model="session.sessionTitle" class="title-input" placeholder="session title…" :disabled="session.running" />
-        <Transition name="settings-saved">
-          <span v-if="settingsSavedToast" class="settings-saved-chip">✓ saved</span>
-        </Transition>
-        <div class="header-actions">
-          <button v-if="session.sessionId && !session.running && !session.reviewMode" class="action-btn" title="Save session" @click="doSaveSession()">save</button>
-          <button v-if="session.sessionId && !session.running" class="action-btn export-btn" title="Export JSON to ~/.pragma/exports/" @click="doExportJson()">↓ JSON</button>
-          <button v-if="session.sessionId && !session.running" class="action-btn export-btn" title="Export Markdown to ~/.pragma/exports/" @click="doExportMd()">↓ MD</button>
-          <button class="action-btn" :class="{ 'focus-active': focusMode }" :title="focusMode ? 'Show all atoms' : 'Show signal only'" @click="focusMode = !focusMode">{{ focusMode ? 'focus' : 'raw' }}</button>
-          <button class="action-btn" title="Usage stats" @click="showUsage = true">usage</button>
-          <button class="action-btn" title="Guide" @click="showHelp = true">?</button>
-          <button class="settings-btn" title="Settings" @click="showSettings = true">⚙</button>
-        </div>
-      </div>
-    </header>
+  <div class="app-layout" data-testid="app-layout">
+    <WebLinkGate v-if="IS_WEB" />
+    <AppHeader
+      v-model:focus-mode="focusMode"
+      :pipeline-steps="pipelineSteps"
+      @new-session="tryNewSession"
+      @export-json="doExportJson"
+      @export-md="doExportMd"
+      @open-usage="showUsage = true"
+      @open-todo="showTodo = true"
+      @open-e2e="showE2e = true"
+      @open-live="showLive = true"
+      @open-pipeline="showPipeline = true"
+      @open-help="showHelp = true"
+      @open-settings="showSettings = true"
+    />
 
-    <div class="main-layout">
-      <SessionPanel :width="leftWidth" />
+    <!-- Web on a narrow screen: the same three panels, one at a time. v-show and not v-if,
+         so switching from one tab to another does not lose scroll and reading state. -->
+    <div v-if="mobile" class="main-layout is-mobile" data-testid="mobile-layout">
+      <div v-show="mobileTab === 'sessions'" class="m-pane" data-testid="m-pane-sessions">
+        <SessionPanel ref="sessionPanelRef" :profile="profiles[profileIdx] ?? null" />
+      </div>
+      <div v-show="mobileTab === 'stream'" class="m-pane center-area" data-testid="m-pane-stream">
+        <div v-if="!projects.hasProjects" class="no-projects-state" data-testid="empty-projects">
+          <div class="no-projects-title">No projects yet</div>
+          <div class="no-projects-sub">Create a project in Pragma on the PC.</div>
+        </div>
+        <AtomStream v-else :focus-mode="focusMode" :working-dir="workingDir || undefined" @open-composer="openComposer" />
+      </div>
+      <div v-show="mobileTab === 'pragma'" class="m-pane" data-testid="m-pane-pragma">
+        <PragmaPanel
+          :profile="profiles[profileIdx] ?? null"
+          :working-dir="workingDir || undefined"
+          @continue-session="openComposer"
+          @new-session="session.newSession()"
+        />
+        <div v-if="!session.sessionId" class="m-empty">Open a session to see its analysis, plan and report.</div>
+      </div>
+    </div>
+
+    <div v-else class="main-layout">
+      <SessionPanel ref="sessionPanelRef" :width="leftWidth" :profile="profiles[profileIdx] ?? null" />
       <div class="resize-handle" @mousedown="startDrag('left', $event)" />
-      <AtomStream :focus-mode="focusMode" :working-dir="workingDir || undefined" :attachments="attachments.length ? attachments : undefined" @open-composer="openComposer" />
+      <div class="center-area">
+        <div v-if="!projects.hasProjects" class="no-projects-state" data-testid="empty-projects">
+          <svg class="no-projects-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <polygon
+              points="92,50 71,13.6 29,13.6 8,50 29,86.4 71,86.4"
+              transform="rotate(90 50 50)"
+              stroke="currentColor"
+              stroke-width="2.75"
+              stroke-linejoin="round"
+            />
+            <polyline
+              points="30,37 46,50 30,63"
+              stroke="currentColor"
+              stroke-width="6.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <circle cx="74" cy="35" r="2.25" fill="currentColor" />
+            <line x1="55" y1="62" x2="74" y2="62" stroke="currentColor" stroke-width="6" stroke-linecap="round" />
+          </svg>
+          <div class="no-projects-title">No projects yet</div>
+          <div class="no-projects-sub">Create a project to start your first Pragma Symphony session.</div>
+          <button class="no-projects-btn" data-testid="btn-empty-new-project" @click="sessionPanelRef?.openNewProject()">New project</button>
+        </div>
+        <AtomStream v-else :focus-mode="focusMode" :working-dir="workingDir || undefined" :attachments="attachments.length ? attachments : undefined" @open-composer="openComposer" />
+      </div>
       <div class="resize-handle" @mousedown="startDrag('right', $event)" />
       <PragmaPanel
         :profile="profiles[profileIdx] ?? null"
@@ -266,133 +509,127 @@ onMounted(async () => {
     </div>
 
     <div class="bottom-bar">
-      <div v-if="session.lastError" class="error-banner">
-        <span class="error-text">
-          <template v-if="session.lastError.includes('cannot start')">
-            ⚠ Claude CLI not found — check the path in
-            <button class="error-settings-link" @click="showSettings = true; session.lastError = null">⚙ Settings</button>
-          </template>
-          <template v-else>⚠ {{ session.lastError }}</template>
-        </span>
-        <button class="error-close" @click="session.lastError = null">×</button>
-      </div>
+      <CacheExpiredBanner
+        v-if="cacheBanner && canCommand"
+        :info="cacheBanner"
+        @summary="startFreshWithSummary"
+        @dismiss="dismissCacheBanner"
+      />
 
-      <div class="prompt-row">
-        <select v-if="profiles.length > 1" v-model="profileIdx" class="binary-select" :disabled="session.running">
-          <option v-for="(p, i) in profiles" :key="i" :value="i">{{ p.label }}</option>
-        </select>
-        <span v-else-if="profiles.length === 1" class="profile-label">{{ profiles[0].label }}</span>
-        <button
-          class="prompt-trigger"
-          :class="{ 'has-text': prompt.length > 0, 'is-waiting': session.pragmaPhase === 'awaiting_answers' }"
-          :disabled="(session.running && session.pragmaPhase !== 'awaiting_answers') || noProfiles"
-          @click="openComposer"
-        >{{ prompt || (noProfiles ? 'configure a profile in Settings…' : session.pragmaPhase === 'awaiting_answers' ? 'write your answer…' : 'prompt…') }}</button>
-        <button
-          class="run-btn"
-          :disabled="(session.running && session.pragmaPhase !== 'awaiting_answers') || noProfiles"
-          @click="prompt.trim() ? submit(selectedModel, autoConfirm) : openComposer()"
-        >{{ session.pragmaPhase === 'awaiting_answers' ? 'awaiting input…' : session.running ? 'running…' : 'run' }}</button>
-        <button v-if="session.running && session.pragmaPhase !== 'awaiting_answers'" class="stop-btn" title="Stop session" @click="session.stopSession()">stop</button>
-      </div>
+      <ErrorBanner
+        v-if="session.lastError"
+        :message="session.lastError"
+        @dismiss="session.lastError = null"
+        @open-settings="showSettings = true; session.lastError = null"
+      />
 
-      <div class="header-workdir">
-        <div class="workdir-group" :class="{ 'workdir-group--set': !!workingDir, 'workdir-group--disabled': session.running }" @click="!session.running && pickWorkingDir()">
-          <span class="group-label">dir</span>
-          <span class="workdir-icon">⌂</span>
-          <span class="workdir-path" :class="{ empty: !workingDir }" :title="workingDir || ''">{{ workingDir || 'none' }}</span>
-          <button v-if="workingDir" class="workdir-clear" :disabled="session.running" title="Remove directory" @click.stop="workingDir = ''">×</button>
-        </div>
-        <div
-          class="attach-group"
-          :class="{ 'attach-group--active': attachments.length > 0, 'attach-group--disabled': session.running }"
-          :title="workingDir ? 'Attach file' : 'Choose working directory and attach file'"
-          @click="!session.running && attachFile()"
-        >
-          <span class="group-label">files</span>
-          <span class="attach-icon">📎</span>
-          <span
-            v-for="name in attachments"
-            :key="name"
-            class="attach-chip"
-            :class="{ 'attach-chip--missing': attachmentExists[name] === false }"
-            :title="attachmentExists[name] === false ? `File not found: ${name}` : name"
-          >
-            <span class="chip-name">{{ name }}</span>
-            <button class="chip-remove" @click.stop="removeAttachment(name)">×</button>
-          </span>
-          <span v-if="!attachments.length" class="attach-empty">no files</span>
-        </div>
-      </div>
+      <PromptBar
+        v-if="canCommand"
+        v-model:profile-idx="profileIdx"
+        :prompt="prompt"
+        :profiles="profiles"
+        @open="openComposer"
+        @run="submit(selectedModel, autoConfirm, null)"
+        @stop="session.stopSession()"
+      />
+
+      <WorkdirBar
+        v-if="showDesktopOnly"
+        :working-dir="workingDir"
+        :attachments="attachments"
+        :attachment-exists="attachmentExists"
+        :disabled="session.running"
+        @pick-dir="pickWorkingDir"
+        @clear-dir="workingDir = ''"
+        @attach="attachFile"
+        @remove="removeAttachment"
+      />
     </div>
 
-    <footer class="app-footer">
-      <div class="footer-left">
-        <span>© 2026</span>
-        <span class="footer-sep">—</span>
-        <a class="footer-link" @click.prevent="openUrl('https://noema.tools')">noema.tools</a>
-        <span class="footer-sep">—</span>
-        <span>lightweb.it - P.IVA IT 02611230349</span>
-      </div>
-      <div class="footer-right">
-        <a class="footer-link" @click.prevent="openUrl('https://noema.tools/pragma/terms')">Terms</a>
-        <a class="footer-link" @click.prevent="openUrl('https://noema.tools/pragma/privacy')">Privacy</a>
-        <a class="footer-link" @click.prevent="openUrl('https://noema.tools/pragma/license')">License</a>
-        <button class="theme-btn" :title="isDark ? 'Switch to light theme' : 'Switch to dark theme'" @click="toggleTheme">{{ isDark ? '☀' : '🌙' }}</button>
-      </div>
-    </footer>
+    <nav v-if="mobile" class="mobile-tabs" data-testid="mobile-tabs">
+      <button
+        v-for="t in (['sessions', 'stream', 'pragma'] as const)"
+        :key="t"
+        class="mobile-tab"
+        :class="{ active: mobileTab === t }"
+        :data-testid="`mobile-tab-${t}`"
+        @click="mobileTab = t"
+      >
+        {{ t === 'sessions' ? 'Sessions' : t === 'stream' ? 'Stream' : 'Pragma' }}
+        <span v-if="t === 'stream' && session.running" class="mobile-tab-dot running" />
+        <span v-if="t === 'pragma' && pragmaAttention" class="mobile-tab-dot" data-testid="mobile-tab-attention" />
+      </button>
+    </nav>
+
+    <AppFooter :is-dark="isDark" @toggle-theme="toggleTheme" />
 
     <SettingsPanel v-if="showSettings" @close="onSettingsClose" />
     <HelpPanel v-if="showHelp" @close="showHelp = false" />
 
     <UsageModal :open="showUsage" :profile="profiles[profileIdx] ?? null" @close="showUsage = false" />
 
+    <TodoModal :open="showTodo" @close="showTodo = false" />
+
+    <E2eModal
+      :open="showE2e"
+      :profile="profiles[profileIdx] ?? null"
+      :working-dir="workingDir"
+      @close="showE2e = false"
+      @generate="onE2eGenerate"
+    />
+
+    <LiveModal
+      :open="showLive"
+      :working-dir="workingDir"
+      @close="showLive = false"
+    />
+
+    <PipelineModal
+      :open="showPipeline"
+      :profile="profiles[profileIdx] ?? null"
+      :working-dir="workingDir"
+      @close="showPipeline = false; loadPipelineSteps()"
+    />
+
     <ComposerModal
       :open="composerOpen"
       :working-dir="workingDir"
+      :cache-warning="cacheWarning"
       v-model:prompt="prompt"
       v-model:selected-model="selectedModel"
       v-model:auto-confirm="autoConfirm"
+      v-model:answers="answers"
       @close="composerOpen = false"
       @submit="submit"
+      @start-fresh="startFreshWithSummary"
     />
 
-    <Transition name="drag-overlay">
-      <div v-if="dragOver" class="drag-overlay">
-        <div class="drag-overlay-inner">
-          <span class="drag-icon">📎</span>
-          <span v-if="workingDir">Drop to attach</span>
-          <span v-else class="drag-no-dir">Set a working directory before attaching files</span>
-        </div>
-      </div>
-    </Transition>
+    <DragOverlay :visible="dragOver" :working-dir="workingDir" />
 
-    <Transition name="export-toast">
-      <div v-if="exportToast" class="export-toast">
-        <span class="export-toast-label">saved to</span>
-        <span class="export-toast-path">{{ exportToast }}</span>
-        <button class="export-toast-close" @click="exportToast = null">×</button>
-      </div>
-    </Transition>
+    <ToastStack v-model:export-toast="exportToast" v-model:error-toast="errorToast" />
 
-    <Transition name="export-toast">
-      <div v-if="errorToast" class="export-toast error-toast">
-        <span class="export-toast-label">⚠</span>
-        <span class="export-toast-path">{{ errorToast }}</span>
-        <button class="export-toast-close" @click="errorToast = null">×</button>
-      </div>
-    </Transition>
+    <ConfirmDialog
+      :open="confirmNewSession"
+      title="New session"
+      :body="`${attachments.length} attached file${attachments.length !== 1 ? 's' : ''} will be removed. Continue?`"
+      @cancel="confirmNewSession = false"
+      @confirm="doConfirmNewSession"
+    />
 
     <Teleport to="body">
-      <div v-if="confirmNewSession" class="confirm-overlay" @click.self="confirmNewSession = false">
-        <div class="confirm-modal">
-          <div class="confirm-modal-title">New session</div>
-          <div class="confirm-modal-body">
-            {{ attachments.length }} attached file{{ attachments.length !== 1 ? 's' : '' }} will be removed. Continue?
+      <div v-if="currentMissed && canCommand" class="missed-overlay" data-testid="missed-overlay">
+        <div class="missed-modal">
+          <div class="missed-modal-icon">⚠</div>
+          <div class="missed-modal-title">Scheduled session missed</div>
+          <div class="missed-modal-name">{{ currentMissed.title || currentMissed.prompt.slice(0, 80) }}</div>
+          <div class="missed-modal-hint">
+            was due on {{ new Date(currentMissed.runAt).toLocaleString() }}, while Pragma was closed.
           </div>
-          <div class="confirm-modal-actions">
-            <button class="confirm-modal-cancel" @click="confirmNewSession = false">Cancel</button>
-            <button class="confirm-modal-ok" @click="doConfirmNewSession">Continue</button>
+          <input v-model="missedRescheduleAt" type="datetime-local" class="missed-reschedule-input" data-testid="missed-reschedule-input" />
+          <div class="missed-modal-actions">
+            <button class="delete-modal-cancel" data-testid="missed-discard" :disabled="missedBusy" @click="discardMissed">Discard</button>
+            <button class="delete-modal-cancel" data-testid="missed-reschedule" :disabled="missedBusy || !missedRescheduleAt" @click="rescheduleMissed">Reschedule</button>
+            <button class="delete-modal-confirm" data-testid="missed-run-now" :disabled="missedBusy" @click="runMissedNow">Run now</button>
           </div>
         </div>
       </div>
@@ -407,21 +644,6 @@ onMounted(async () => {
   height: 100vh;
 }
 
-.header {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.header-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px 4px;
-}
-
 .bottom-bar {
   display: flex;
   flex-direction: column;
@@ -430,336 +652,127 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.prompt-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 16px;
-}
+/* On the web the bottom bar may be left with nothing inside (no prompt without commands, no dir). */
+.bottom-bar:empty { display: none; }
 
-.logo {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--color-atom-code);
-  letter-spacing: 0.12em;
-  flex-shrink: 0;
-}
+.main-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
-.new-btn {
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 1rem;
-  font-weight: 300;
-  padding: 0 7px;
-  line-height: 1.6;
-  flex-shrink: 0;
-  transition: color 0.15s, border-color 0.15s;
-}
-.new-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--text-secondary); }
-.new-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-
-.title-input {
+/* — Web on a narrow screen — */
+.m-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* The side panels become full width; nothing to compress when it is the only one on screen. */
+.m-pane :deep(.session-panel),
+.m-pane :deep(.pragma-panel) { width: auto !important; flex: 1; min-width: 0; border: none; }
+.m-pane :deep(.collapse-btn) { display: none; }
+.m-empty {
   flex: 1;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  border-radius: 0;
-  padding: 2px 4px;
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 0.92rem;
-  font-weight: 500;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.title-input:focus { border-color: var(--color-atom-code); }
-.title-input:disabled { opacity: 0.4; }
-.title-input::placeholder { color: var(--text-secondary); opacity: 0.5; }
-
-.settings-saved-chip {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #4caf50;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.settings-saved-enter-active,
-.settings-saved-leave-active { transition: opacity 0.2s ease; }
-.settings-saved-enter-from,
-.settings-saved-leave-to { opacity: 0; }
-
-.header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.action-btn {
-  padding: 4px 10px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 0.85rem;
   color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
 }
-.action-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
-.focus-active { color: var(--color-atom-code); border-color: var(--color-atom-code); background: rgba(106, 176, 245, 0.08); }
-.export-btn { color: var(--color-atom-config); }
 
-.settings-btn {
+.mobile-tabs {
+  display: flex;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-tab {
+  flex: 1;
+  position: relative;
+  padding: 11px 0 12px;
   background: none;
   border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 1rem;
-  padding: 2px 4px;
-  transition: color 0.15s;
-}
-.settings-btn:hover { color: var(--text-primary); }
-
-.prompt-trigger {
-  flex: 1;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 6px 12px;
+  border-top: 2px solid transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 0.88rem;
-  text-align: left;
+  font-size: 0.85rem;
   cursor: pointer;
-  height: 32px;
-  line-height: 20px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  transition: border-color 0.15s, color 0.15s;
 }
-.prompt-trigger.has-text { color: var(--text-primary); }
-.prompt-trigger.is-waiting { border-color: #a07de0; color: #a07de0; }
-.prompt-trigger:hover:not(:disabled) { border-color: var(--color-atom-code); }
-.prompt-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
+.mobile-tab.active { color: var(--color-atom-code); border-top-color: var(--color-atom-code); }
+.mobile-tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: #d4a843;
+}
+.mobile-tab-dot.running { background: #7ec8a0; }
 
-.run-btn {
-  padding: 6px 18px;
+.center-area { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+.no-projects-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-secondary);
+}
+.no-projects-icon { width: 25rem; height: 25rem; max-width: 40vh; max-height: 40vh; color: var(--text-primary); opacity: 0.25; }
+.no-projects-title { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+.no-projects-sub { font-size: 0.84rem; opacity: 0.6; }
+.no-projects-btn {
+  margin-top: 6px;
+  padding: 8px 22px;
   background: var(--color-atom-code);
   color: #fff;
   border: none;
-  border-radius: 6px;
-  cursor: pointer;
+  border-radius: 7px;
   font-family: inherit;
   font-size: 0.88rem;
   font-weight: 600;
-  transition: background 0.15s;
-  flex-shrink: 0;
-}
-.run-btn:hover:not(:disabled) { background: #5aa0e8; }
-.run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.stop-btn {
-  padding: 6px 14px;
-  background: #c0392b;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
   cursor: pointer;
-  font-family: inherit;
-  font-size: 0.88rem;
-  font-weight: 600;
-  flex-shrink: 0;
   transition: background 0.15s;
 }
-.stop-btn:hover { background: #e74c3c; }
+.no-projects-btn:hover { background: #5aa0e8; }
 
-.error-banner {
+/* Missed scheduled sessions — same visual register as
+   .delete-overlay/.delete-modal (global, defined in SessionPanel.vue), with the
+   fields of the three-way Discard/Reschedule/Run now choice. */
+.missed-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  background: rgba(0,0,0,0.5);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 16px 4px;
-  background: rgba(192, 57, 43, 0.15);
-  border-top: 1px solid rgba(192, 57, 43, 0.4);
+  justify-content: center;
+  backdrop-filter: blur(2px);
 }
-.error-text {
-  flex: 1;
-  font-size: 0.78rem;
-  color: #e06c75;
-  font-family: monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.error-close {
-  background: none;
-  border: none;
-  color: #e06c75;
-  cursor: pointer;
-  font-size: 0.9rem;
-  padding: 0 4px;
-  flex-shrink: 0;
-  line-height: 1;
-}
-.error-close:hover { color: #fff; }
-.error-settings-link {
-  background: none;
-  border: none;
-  color: #e06c75;
-  cursor: pointer;
-  font-size: inherit;
-  font-family: inherit;
-  padding: 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.error-settings-link:hover { color: #fff; }
-
-.binary-select {
+.missed-modal {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 6px 8px;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 0.82rem;
-  outline: none;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.binary-select:disabled { opacity: 0.4; }
-
-.profile-label {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.header-workdir {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 16px 8px;
-}
-
-.workdir-group,
-.attach-group {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.workdir-group--disabled,
-.attach-group--disabled { cursor: not-allowed; opacity: 0.5; }
-
-.group-label {
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.45;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.workdir-group {
-  border-color: rgba(180, 130, 50, 0.25);
-  background: rgba(180, 130, 50, 0.06);
-}
-.workdir-group:hover:not(.workdir-group--disabled) {
-  border-color: rgba(180, 130, 50, 0.5);
-  background: rgba(180, 130, 50, 0.12);
-}
-.workdir-group .group-label { color: #c8973a; opacity: 0.7; }
-.workdir-group--set { border-color: rgba(180, 130, 50, 0.45); background: rgba(180, 130, 50, 0.1); }
-.workdir-group--set .group-label { opacity: 1; }
-
-.attach-group {
-  border-color: rgba(80, 170, 160, 0.2);
-  background: rgba(80, 170, 160, 0.05);
-  flex-wrap: wrap;
-  max-width: 600px;
-}
-.attach-group:hover:not(.attach-group--disabled) {
-  border-color: rgba(80, 170, 160, 0.45);
-  background: rgba(80, 170, 160, 0.1);
-}
-.attach-group .group-label { color: #50aaa0; opacity: 0.7; }
-.attach-group--active { border-color: rgba(80, 170, 160, 0.45); background: rgba(80, 170, 160, 0.1); }
-.attach-group--active .group-label { opacity: 1; }
-
-.attach-empty { font-size: 0.72rem; font-style: italic; opacity: 0.35; }
-
-.workdir-icon { color: #c8973a; font-size: 0.9rem; flex-shrink: 0; opacity: 0.8; pointer-events: none; }
-
-.workdir-path {
-  font-size: 0.75rem;
-  font-family: monospace;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-  max-width: 420px;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-.workdir-path:hover:not(.empty) { color: var(--text-primary); }
-.workdir-path.empty { opacity: 0.4; cursor: default; font-family: inherit; font-style: italic; }
-
-.workdir-clear {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 0.8rem;
-  padding: 0 2px;
-  flex-shrink: 0;
-  line-height: 1;
-}
-.workdir-clear:hover { color: #e06c75; }
-
-.attach-icon { flex-shrink: 0; pointer-events: none; font-size: 0.85rem; color: #50aaa0; opacity: 0.8; }
-
-.attach-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(80, 170, 160, 0.12);
-  border: 1px solid rgba(80, 170, 160, 0.35);
   border-radius: 12px;
-  padding: 2px 8px 2px 10px;
-  font-size: 0.72rem;
-  font-family: monospace;
-  color: #50aaa0;
-  max-width: 200px;
+  padding: 28px 32px 24px;
+  min-width: 300px;
+  max-width: 420px;
+  text-align: center;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.4);
 }
-.attach-chip--missing { background: rgba(200, 60, 60, 0.10); border-color: rgba(200, 60, 60, 0.40); color: #c44; }
-
-.chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-
-.chip-remove {
-  background: none;
-  border: none;
-  color: #50aaa0;
-  cursor: pointer;
-  font-size: 0.75rem;
-  padding: 0;
-  line-height: 1;
-  flex-shrink: 0;
-  opacity: 0.7;
+.missed-modal-icon { font-size: 2rem; margin-bottom: 12px; color: #d4a843; }
+.missed-modal-title { font-size: 1rem; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.missed-modal-name {
+  font-size: 0.82rem; color: var(--text-primary);
+  background: var(--bg-secondary); border-radius: 6px; padding: 4px 10px;
+  display: inline-block; margin-bottom: 8px; word-break: break-word;
 }
-.chip-remove:hover { color: #e06c75; opacity: 1; }
-
-.main-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.missed-modal-hint { font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.4; }
+.missed-reschedule-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg-secondary); border: 1px solid var(--border-color);
+  border-radius: 6px; padding: 6px 10px; color: var(--text-primary);
+  font-family: inherit; font-size: 0.82rem; margin-bottom: 16px; outline: none;
+}
+.missed-reschedule-input:focus { border-color: var(--color-atom-code); }
+.missed-modal-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
 .resize-handle {
   width: 4px;
@@ -772,158 +785,4 @@ onMounted(async () => {
 }
 .resize-handle::after { content: ''; position: absolute; inset: 0; left: -3px; right: -3px; }
 .resize-handle:hover { background: var(--color-atom-code); opacity: 0.45; }
-
-.app-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 16px;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  flex-shrink: 0;
-  font-size: 0.68rem;
-  color: var(--text-secondary);
-  gap: 8px;
-}
-
-.footer-left,
-.footer-right { display: flex; align-items: center; gap: 6px; }
-.footer-sep { opacity: 0.4; }
-
-.footer-link {
-  color: var(--color-atom-code);
-  text-decoration: none;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-.footer-link:hover { opacity: 0.75; }
-
-.theme-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0 2px;
-  line-height: 1;
-  transition: opacity 0.15s;
-  color: inherit;
-}
-.theme-btn:hover { opacity: 0.7; }
-
-.drag-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(40, 44, 52, 0.82);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
-.drag-overlay-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 40px 60px;
-  border: 2px dashed var(--accent);
-  border-radius: 16px;
-  color: var(--text-primary);
-  font-size: 1.1rem;
-}
-.drag-icon { font-size: 2.5rem; }
-.drag-no-dir { color: #e06c75; font-size: 0.9rem; text-align: center; }
-.drag-overlay-enter-active,
-.drag-overlay-leave-active { transition: opacity 0.15s; }
-.drag-overlay-enter-from,
-.drag-overlay-leave-to { opacity: 0; }
-
-.export-toast {
-  position: fixed;
-  bottom: 52px;
-  right: 16px;
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 7px;
-  padding: 8px 12px;
-  box-shadow: 0 4px 18px rgba(0,0,0,0.35);
-  max-width: 480px;
-}
-.export-toast-label { font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
-.export-toast-path { font-size: 0.72rem; font-family: monospace; color: var(--color-atom-config); word-break: break-all; flex: 1; }
-.export-toast-close {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
-  padding: 0 2px;
-  flex-shrink: 0;
-}
-.export-toast-close:hover { color: var(--text-primary); }
-.export-toast-enter-active,
-.export-toast-leave-active { transition: opacity 0.18s ease, transform 0.18s ease; }
-.export-toast-enter-from,
-.export-toast-leave-to { opacity: 0; transform: translateY(8px); }
-
-.error-toast {
-  bottom: 96px;
-  border-color: var(--error-color, #e05c5c);
-  background: color-mix(in srgb, var(--error-color, #e05c5c) 12%, var(--bg-secondary));
-}
-
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  backdrop-filter: blur(2px);
-}
-.confirm-modal {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 28px 32px 24px;
-  min-width: 280px;
-  max-width: 360px;
-  text-align: center;
-  box-shadow: 0 8px 40px rgba(0,0,0,0.4);
-}
-.confirm-modal-title { font-size: 1rem; font-weight: 600; color: var(--text-primary); margin-bottom: 10px; }
-.confirm-modal-body { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 22px; line-height: 1.5; }
-.confirm-modal-actions { display: flex; gap: 10px; justify-content: center; }
-.confirm-modal-cancel {
-  padding: 7px 20px;
-  border-radius: 7px;
-  border: 1px solid var(--border-color);
-  background: none;
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.confirm-modal-cancel:hover { background: var(--bg-secondary); }
-.confirm-modal-ok {
-  padding: 7px 20px;
-  border-radius: 7px;
-  border: none;
-  background: var(--color-atom-code);
-  color: #fff;
-  font-family: inherit;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.confirm-modal-ok:hover { background: #5aa0e8; }
 </style>

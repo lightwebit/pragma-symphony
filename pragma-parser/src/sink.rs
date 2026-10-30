@@ -2,7 +2,7 @@ use crate::types::{Atom, AtomSink};
 use anyhow::Result;
 
 // ---------------------------------------------------------------------------
-// StdoutSink — emette ogni atomo come riga JSON su stdout (NDJSON)
+// StdoutSink — emits every atom as a JSON line on stdout (NDJSON)
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -30,8 +30,8 @@ impl AtomSink for StdoutSink {
 }
 
 // ---------------------------------------------------------------------------
-// FanOutSink — inoltra ogni atomo a più sink in sequenza
-// Usato da pragma-cli per alimentare StdoutSink + SqliteSink insieme.
+// FanOutSink — forwards every atom to several sinks in sequence
+// Used by pragma-cli to feed StdoutSink + SqliteSink together.
 // ---------------------------------------------------------------------------
 
 pub struct FanOutSink {

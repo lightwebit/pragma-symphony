@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '../platform'
 import type { Profile } from '../stores/settings'
 import {
   USAGE_TICK_INTERVAL_MS, USAGE_HARD_TIMEOUT_MS,

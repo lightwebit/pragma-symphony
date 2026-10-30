@@ -1,11 +1,11 @@
 # Pragma — Pattern configuration
 # Edit this file to add/fix patterns without recompiling.
 # This file takes precedence over the embedded defaults.
-# See docs/PARSER_PATTERNS.md for full documentation.
+# Patterns are matched against lines of the Claude CLI output.
 #
-# NOTA: Claude Code in italiano usa frasi diverse dall'inglese.
-# I path possono essere wrappati in backtick: `path/to/file.rs`
-# Il gruppo di cattura deve estrarre il path con o senza backtick.
+# NOTE: Claude Code in other languages uses different phrases from English.
+# Paths may be wrapped in backticks: `path/to/file.rs`
+# The capture group must extract the path with or without backticks.
 
 [error]
 prefixes = [
@@ -45,12 +45,12 @@ hunk_marker = "@@ "
 
 # ---------------------------------------------------------------------------
 # FILE_TOUCH patterns
-# Ordine: dal più specifico al più generico.
-# Gruppo 1 cattura il path, con o senza backtick.
-# Il path viene poi validato da is_valid_path().
+# Order: from most specific to most generic.
+# Group 1 captures the path, with or without backticks.
+# The path is then validated by is_valid_path().
 # ---------------------------------------------------------------------------
 
-# --- ITALIANO (Claude Code in lingua italiana) ---
+# --- ITALIAN (Claude Code in the Italian language) ---
 
 [[file_touch.patterns]]
 regex = "(?i)file creato in `([^`]+)`"
@@ -84,9 +84,9 @@ action = "Delete"
 regex = "(?i)(?:ho )?eliminato `([^`]+)`"
 action = "Delete"
 
-# --- GENERICO — path in backtick (qualsiasi lingua) ---
-# Cattura qualsiasi riga che menziona create/write/scritto/creato
-# seguita da un path in backtick
+# --- GENERIC — path in backticks (any language) ---
+# Captures any line that mentions create/write/scritto/creato
+# followed by a path in backticks
 
 [[file_touch.patterns]]
 regex = "(?i)(?:creat|writ|scriv|scritt).{0,30}`([^`]+)`"
@@ -100,7 +100,7 @@ action = "Modify"
 regex = "(?i)(?:delet|remov|eliminat|rimoss).{0,30}`([^`]+)`"
 action = "Delete"
 
-# --- INGLESE standard ---
+# --- Standard ENGLISH ---
 
 [[file_touch.patterns]]
 regex = "(?i)created? (?:file:? )?`?([^`\n]+)`?"
