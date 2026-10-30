@@ -4,7 +4,7 @@
 
 Free and open source under the MIT licence. Built with Tauri, Rust and Vue 3.
 
-![Pragma Symphony main window](docs/screenshots/main.png)
+![Pragma Symphony main window](docs/screenshots/10-session-full-cycle-dark.png)
 
 > Pragma Symphony is an independent project. It is not affiliated with or endorsed by Anthropic, and it is unrelated to other projects named "Symphony".
 
@@ -47,7 +47,7 @@ It does not replace Claude Code: it runs your installed `claude` binary with you
 
 | Plan approval | Code review | From your phone |
 |---|---|---|
-| ![Plan](docs/screenshots/plan.png) | ![Review](docs/screenshots/review.png) | ![Phone](docs/screenshots/web-phone.png) |
+| ![Plan](docs/screenshots/42-live-plan-awaiting-approval-dark.png) | ![Review](docs/screenshots/11-card-review-dark.png) | ![Questions](docs/screenshots/40-live-questions-dark.png) |
 
 More in the [guide](docs/GUIDE.md) and the [screenshot gallery](docs/screenshots/README.md).
 
