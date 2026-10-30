@@ -156,4 +156,4 @@ The end-of-session sound comes from [Interface Sounds](https://kenney.nl/assets/
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Made by [Paolo Tanzi](https://noema.tools/pragma).
+MIT — see [LICENSE](LICENSE). Made by [Paolo Tanzi](https://www.linkedin.com/in/paolotanzi/).
