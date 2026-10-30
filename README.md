@@ -45,7 +45,7 @@ It does not replace Claude Code: it runs your installed `claude` binary with you
 **On the go**
 - Follow a session from your phone through a temporary link, and optionally send commands protected by a PIN. See [Web sharing](#web-sharing)
 
-| Plan approval | Code review | From your phone |
+| Plan approval | Code review | Questions before the plan |
 |---|---|---|
 | ![Plan](docs/screenshots/42-live-plan-awaiting-approval-dark.png) | ![Review](docs/screenshots/11-card-review-dark.png) | ![Questions](docs/screenshots/40-live-questions-dark.png) |
 
